@@ -162,6 +162,15 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Light as a single colored point
+    std::vector<vec3f> light_point{viz::to_glm_vec3(config.light.position)};
+    auto* light_cloud = polyscope::registerPointCloud("Light", light_point);
+    light_cloud->setPointRadius(0.02, /*isRelative=*/true);
+    light_cloud->setPointColor(glm::vec3(
+        static_cast<float>(config.light.color.x),
+        static_cast<float>(config.light.color.y),
+        static_cast<float>(config.light.color.z)));
+
     // Add axes and show UI
     constexpr double axis_length = 0.5;
     viz::AxesVizOptions axes_opt;

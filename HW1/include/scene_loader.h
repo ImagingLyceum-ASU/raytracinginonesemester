@@ -12,6 +12,12 @@ struct RenderSettings {
     int max_bounces = 8;
 };
 
+// Light parameters (corresponds to JSON "light")
+struct LightParams {
+    camera::point3 position{-3.0f, 0.0f, 1.0f};
+    camera::vec3 color{1.0f, 1.0f, 1.0f};
+};
+
 // Camera parameters (corresponds to JSON "camera")
 struct CameraParams {
     double focal_length_mm = 50.0;
@@ -30,10 +36,11 @@ struct SceneNode {
     std::string path;  // e.g. "./assets/meshes/frog.obj"
 };
 
-// Full scene config: settings + camera + scene
+// Full scene config: settings + camera + light + scene
 struct SceneConfig {
     RenderSettings settings;
     CameraParams camera;
+    LightParams light;
     std::vector<SceneNode> scene;
 };
 

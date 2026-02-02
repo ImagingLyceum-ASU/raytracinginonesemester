@@ -50,8 +50,8 @@ int main(int argc, char** argv)
     }
 
     Light light;
-    light.position = make_vec3(-3.0f, 0.0f, 1.0f);
-    light.color = make_vec3(1.0f, 1.0f, 1.0f);
+    light.position = config.light.position;
+    light.color = config.light.color;
 
     std::vector<Vec3> image(static_cast<size_t>(pixel_width) * static_cast<size_t>(pixel_height));
     std::string output_filename = "output.png";

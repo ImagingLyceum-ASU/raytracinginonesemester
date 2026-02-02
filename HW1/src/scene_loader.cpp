@@ -70,6 +70,15 @@ SceneConfig SceneLoader::load(const std::string& json_path,
             config.camera.up = parse_vec3(c["up"]);
     }
 
+    // light
+    if (j.contains("light")) {
+        const auto& l = j["light"];
+        if (l.contains("position"))
+            config.light.position = parse_vec3(l["position"]);
+        if (l.contains("color"))
+            config.light.color = parse_vec3(l["color"]);
+    }
+
     // scene
     if (j.contains("scene") && j["scene"].is_array()) {
         for (const auto& node : j["scene"]) {
