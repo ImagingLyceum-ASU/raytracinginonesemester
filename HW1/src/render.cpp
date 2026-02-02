@@ -57,7 +57,11 @@ int main(int argc, char** argv)
     std::string output_filename = "output.png";
 
     auto center = cam.get_center();
+    const int bar_width = 40;
     for (int j = 0; j < pixel_height; j++) {
+        int pct = pixel_height ? (j * 100 / pixel_height) : 0;
+        int filled = pixel_height ? (j * bar_width / pixel_height) : 0;
+        std::cerr << "\r[" << std::string(filled, '=') << std::string(bar_width - filled, ' ') << "] " << pct << "%" << std::flush;
         for (int i = 0; i < pixel_width; i++) {
             Ray r = Ray(center, cam.get_pixel_position(i, j) - center);
             HitRecord prev;
@@ -87,6 +91,7 @@ int main(int argc, char** argv)
             image[static_cast<size_t>(j) * static_cast<size_t>(pixel_width) + static_cast<size_t>(i)] = color;
         }
     }
+    std::cerr << "\r[" << std::string(bar_width, '=') << "] 100%\n";
     std::vector<unsigned char> png_data(static_cast<size_t>(pixel_width) * static_cast<size_t>(pixel_height) * 3);
     const size_t pixel_count = static_cast<size_t>(pixel_width) * static_cast<size_t>(pixel_height);
     for (size_t k = 0; k < pixel_count; ++k) {
