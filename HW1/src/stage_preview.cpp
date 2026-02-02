@@ -1,19 +1,23 @@
 #include <array>
 #include <iostream>
+#include <string>
 #include <vector>
 #include <sstream>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include "camera.h"
+#include "MeshOBJ.h"
+#include "scene_loader.h"
+#include "vec3.h"
 #include "visualization.h"
 
 #include "polyscope/curve_network.h"
 #include "polyscope/point_cloud.h"
+#include "polyscope/surface_mesh.h"
 
-using point3d = glm::dvec3;
-using vec3d   = glm::dvec3;
-using vec3f   = glm::vec3;
+using vec3f = glm::vec3;
 
 // Build a list of pixel world positions (as glm::vec3 for Polyscope)
 static std::vector<vec3f> build_pixel_points(const camera& cam) {
@@ -22,7 +26,7 @@ static std::vector<vec3f> build_pixel_points(const camera& cam) {
 
     for (int j = 0; j < cam.pixel_height; ++j) {
         for (int i = 0; i < cam.pixel_width; ++i) {
-            point3d p = cam.get_pixel_position(i, j);
+            camera::point3 p = cam.get_pixel_position(i, j);
             pixels.emplace_back(viz::to_glm_vec3(p));
         }
     }
@@ -34,7 +38,7 @@ static void build_ray_network(const camera& cam,
                               std::vector<vec3f>& out_nodes,
                               std::vector<std::array<size_t, 2>>& out_edges)
 {
-    const point3d cam_center = cam.get_center();
+    const camera::point3 cam_center = cam.get_center();
     out_nodes.clear();
     out_edges.clear();
 
@@ -45,7 +49,7 @@ static void build_ray_network(const camera& cam,
     // Add pixel nodes and edges (camera -> pixel)
     for (int j = 0; j < cam.pixel_height; ++j) {
         for (int i = 0; i < cam.pixel_width; ++i) {
-            point3d p = cam.get_pixel_position(i, j);
+            camera::point3 p = cam.get_pixel_position(i, j);
             size_t pixel_node_idx = out_nodes.size();
             out_nodes.emplace_back(viz::to_glm_vec3(p));
             out_edges.push_back({cam_node_idx, pixel_node_idx});
@@ -71,11 +75,41 @@ static void register_with_polyscope(const std::vector<vec3f>& camera_point,
     ray_network->setRadius(0.001, /*isRelative=*/radius_is_relative);
 }
 
+// Load mesh from OBJ and register to Polyscope
+static void register_mesh_from_obj(const std::string& objPath, const std::string& meshName) {
+    MeshSOA mesh;
+    if (!LoadOBJ_ToMeshSOA(objPath, mesh)) {
+        std::cerr << "Failed to load OBJ: " << objPath << "\n";
+        return;
+    }
+
+    // Vertices: MeshSOA.positions (Vec3) -> glm::vec3
+    std::vector<vec3f> vertices;
+    vertices.reserve(mesh.positions.size());
+    for (const auto& p : mesh.positions) {
+        vertices.emplace_back(p.x, p.y, p.z);
+    }
+
+    // Faces: MeshSOA.indices are 3*uint32_t per triangle -> Fx3
+    const size_t numTris = mesh.indices.size() / 3u;
+    std::vector<std::array<size_t, 3>> faces;
+    faces.reserve(numTris);
+    for (size_t i = 0; i < numTris; ++i) {
+        faces.push_back({
+            static_cast<size_t>(mesh.indices[3u * i + 0u]),
+            static_cast<size_t>(mesh.indices[3u * i + 1u]),
+            static_cast<size_t>(mesh.indices[3u * i + 2u])
+        });
+    }
+
+    polyscope::registerSurfaceMesh(meshName, vertices, faces);
+}
+
 static void print_pixel_positions(const camera& cam) {
     std::ostringstream oss;
     for (int j = 0; j < cam.pixel_height; ++j) {
         for (int i = 0; i < cam.pixel_width; ++i) {
-            point3d p = cam.get_pixel_position(i, j);
+            camera::point3 p = cam.get_pixel_position(i, j);
             oss << "Pixel (" << i << ", " << j << "): ("
                 << p.x << ", " << p.y << ", " << p.z << ")\n";
         }
@@ -83,24 +117,27 @@ static void print_pixel_positions(const camera& cam) {
     std::cout << oss.str();
 }
 
-int main() {
-    // World units: meters
-    const point3d camera_position{0.0, 0.0, 0.3};
-    const point3d look_at{0.0, 4.0, 0.3};
-    const vec3d up{0.0, 0.0, 1.0};
+int main(int argc, char** argv) {
+    // Load scene config from JSON, default config/frog.json
+    std::string config_path = "config/frog.json";
+    if (argc >= 2) config_path = argv[1];
 
-    const double focal_length_mm = 500.0;
-    const double sensor_height_mm = 200.0; // full-frame
-    const int pixel_width = 80;
-    const int pixel_height = 45;
+    std::string base_dir = ".";
+    SceneConfig config;
+    try {
+        config = SceneLoader::load(config_path, base_dir);
+    } catch (const std::exception& e) {
+        std::cerr << "SceneLoader error: " << e.what() << "\n";
+        return 1;
+    }
 
-    camera cam(camera_position, look_at, up, focal_length_mm, sensor_height_mm, pixel_width, pixel_height);
+    camera cam = SceneLoader::make_camera(config.camera);
 
-    // Initializing Polyscope using visualization helper 
+    // Initializing Polyscope using visualization helper
     viz::init_polyscope_zup();
 
     // Camera point cloud (single point)
-    const point3d cam_center = cam.get_center();
+    const camera::point3 cam_center = cam.get_center();
     std::vector<vec3f> camera_point;
     camera_point.emplace_back(viz::to_glm_vec3(cam_center));
 
@@ -112,11 +149,27 @@ int main() {
     std::vector<std::array<size_t,2>> ray_edges;
     build_ray_network(cam, ray_nodes, ray_edges);
 
-    // Print pixel coordinates to console
-    print_pixel_positions(cam);
+    // // Print pixel coordinates to console
+    // print_pixel_positions(cam);
 
     // Register with Polyscope
     register_with_polyscope(camera_point, pixel_points, ray_nodes, ray_edges);
+
+    // Import meshes from scene config and visualize
+    for (const auto& node : config.scene) {
+        if (node.type == "mesh" && !node.path.empty()) {
+            register_mesh_from_obj(node.path, node.name.empty() ? "mesh" : node.name);
+        }
+    }
+
+    // Light as a single colored point
+    std::vector<vec3f> light_point{viz::to_glm_vec3(config.light.position)};
+    auto* light_cloud = polyscope::registerPointCloud("Light", light_point);
+    light_cloud->setPointRadius(0.02, /*isRelative=*/true);
+    light_cloud->setPointColor(glm::vec3(
+        static_cast<float>(config.light.color.x),
+        static_cast<float>(config.light.color.y),
+        static_cast<float>(config.light.color.z)));
 
     // Add axes and show UI
     constexpr double axis_length = 0.5;
