@@ -17,33 +17,33 @@
     },
     "scene": [
         {
-            "name": "sphere_1",
+            "name": "cuboid_1",
             "type": "mesh",
-            "path": "./assets/meshes/sphere.obj",
+            "path": "./assets/meshes/cube.obj",
             "transform": {
                 "position": [0.8, 0.0, 0.5],
-                "rotation": [0.0, 0.0, 0.0],
-                "scale": [0.5, 0.5, 0.5]
+                "rotation": [45.0, 0.0, 0.0],
+                "scale": [0.3, 0.4, 0.5]
             }
         },
         {
-            "name": "sphere_2",
+            "name": "cuboid_2",
             "type": "mesh",
-            "path": "./assets/meshes/sphere.obj",
+            "path": "./assets/meshes/cube.obj",
             "transform": {
                 "position": [-0.6, -0.2, 0.2],
-                "rotation": [0.0, 0.0, 0.0],
-                "scale": [0.2, 0.2, 0.2]
+                "rotation": [20.0, 20.0, 20.0],
+                "scale": [0.2, 0.3, 0.2]
             }
         },
         {
-            "name": "sphere_3",
+            "name": "cuboid_3",
             "type": "mesh",
-            "path": "./assets/meshes/sphere.obj",
+            "path": "./assets/meshes/cube.obj",
             "transform": {
                 "position": [-0.2, 0.6, 0.7],
-                "rotation": [0.0, 0.0, 0.0],
-                "scale": [0.7, 0.7, 0.7]
+                "rotation": [0.0, 30.0, 0.0],
+                "scale": [0.7, 0.9, 0.5]
             }
         },
         {

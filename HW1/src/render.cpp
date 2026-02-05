@@ -3,6 +3,7 @@
 #include "ray.h"
 #include "raytracer.h"
 #include "scene_loader.h"
+#include "transform.h"
 #include "vec3.h"
 #include <vector>
 #include <iostream>
@@ -43,6 +44,7 @@ int main(int argc, char** argv)
             std::cerr << "Failed to load OBJ: " << node.path << "\n";
             return 1;
         }
+        ApplyTransformToMeshSOA(mesh, node.transform);
         const size_t vc = mesh.positions.size();
         const size_t tc = mesh.indices.size() / 3;
         std::cout << "  Vertices: " << vc << ", Triangles: " << tc << "\n";

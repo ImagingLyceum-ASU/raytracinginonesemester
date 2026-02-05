@@ -2,6 +2,7 @@
 #define SCENE_LOADER_H
 
 #include "camera.h"
+#include "transform.h"
 #include "vec3.h"
 
 #include <string>
@@ -34,6 +35,7 @@ struct SceneNode {
     std::string name;
     std::string type;  // e.g. "mesh"
     std::string path;  // e.g. "./assets/meshes/frog.obj"
+    Transform transform; // per-mesh transform (optional in JSON)
 };
 
 // Full scene config: settings + camera + light + scene

@@ -18,6 +18,36 @@ camera::point3 parse_vec3(const json& j) {
     };
 }
 
+Vec3 parse_vec3_v(const json& j) {
+    camera::point3 p = parse_vec3(j);
+    return make_vec3(p.x, p.y, p.z);
+}
+
+Transform parse_transform(const json& node) {
+    Transform t{};
+    if (!node.contains("transform")) return t;
+
+    const auto& tr = node["transform"];
+    if (!tr.is_object()) return t;
+
+    if (tr.contains("position")) {
+        t.position = parse_vec3_v(tr["position"]);
+    }
+    if (tr.contains("rotation")) {
+        t.rotation_deg = parse_vec3_v(tr["rotation"]);
+    }
+    if (tr.contains("scale")) {
+        const auto& sc = tr["scale"];
+        if (sc.is_number()) {
+            const float s = static_cast<float>(sc.get<double>());
+            t.scale = make_vec3(s, s, s);
+        } else {
+            t.scale = parse_vec3_v(sc);
+        }
+    }
+    return t;
+}
+
 std::string resolve_path(const std::string& base_dir, const std::string& path) {
     if (path.empty()) return path;
     if (path.size() >= 2 && path[0] == '.' && (path[1] == '/' || path[1] == '\\'))
@@ -89,6 +119,7 @@ SceneConfig SceneLoader::load(const std::string& json_path,
                 std::string raw = node["path"].get<std::string>();
                 sn.path = resolve_path(base_dir, raw);
             }
+            sn.transform = parse_transform(node);
             config.scene.push_back(std::move(sn));
         }
     }

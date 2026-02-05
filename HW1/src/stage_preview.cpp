@@ -10,6 +10,7 @@
 #include "camera.h"
 #include "MeshOBJ.h"
 #include "scene_loader.h"
+#include "transform.h"
 #include "vec3.h"
 #include "visualization.h"
 
@@ -76,12 +77,13 @@ static void register_with_polyscope(const std::vector<vec3f>& camera_point,
 }
 
 // Load mesh from OBJ and register to Polyscope
-static void register_mesh_from_obj(const std::string& objPath, const std::string& meshName) {
+static void register_mesh_from_obj(const std::string& objPath, const std::string& meshName, const Transform& xf) {
     MeshSOA mesh;
     if (!LoadOBJ_ToMeshSOA(objPath, mesh)) {
         std::cerr << "Failed to load OBJ: " << objPath << "\n";
         return;
     }
+    ApplyTransformToMeshSOA(mesh, xf);
 
     // Vertices: MeshSOA.positions (Vec3) -> glm::vec3
     std::vector<vec3f> vertices;
@@ -158,7 +160,7 @@ int main(int argc, char** argv) {
     // Import meshes from scene config and visualize
     for (const auto& node : config.scene) {
         if (node.type == "mesh" && !node.path.empty()) {
-            register_mesh_from_obj(node.path, node.name.empty() ? "mesh" : node.name);
+            register_mesh_from_obj(node.path, node.name.empty() ? "mesh" : node.name, node.transform);
         }
     }
 
