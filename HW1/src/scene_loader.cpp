@@ -134,6 +134,8 @@ SceneConfig SceneLoader::load(const std::string& json_path,
             config.light.position = parse_vec3(l["position"]);
         if (l.contains("color"))
             config.light.color = parse_vec3(l["color"]);
+        if (l.contains("intensity"))
+            config.light.intensity = static_cast<float>(l["intensity"].get<double>());
     }
 
     // scene

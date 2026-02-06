@@ -10,6 +10,7 @@
 struct Light {
     Vec3 position;
     Vec3 color;
+    float intensity = 1.0f;  // light intensity multiplier
 };
 
 // Small offset to avoid self-intersection / "shadow acne"
@@ -113,7 +114,7 @@ inline Vec3 ShadeDirect(const Ray& r,
         Vec3 f = EvaluateBRDF(rec.mat, N, V, L);
 
         // Light contribution
-        Vec3 radiance = light.color;
+        Vec3 radiance = light.color * light.intensity;
         Vec3 direct = (radiance * f) * NdotL;
 
         Lo = Lo + direct;

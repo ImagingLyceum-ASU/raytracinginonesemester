@@ -29,6 +29,7 @@ struct RenderSettings {
 struct LightParams {
     camera::point3 position{-3.0f, 0.0f, 1.0f};
     camera::vec3 color{1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;  // light intensity multiplier
 };
 
 // Camera parameters (corresponds to JSON "camera")

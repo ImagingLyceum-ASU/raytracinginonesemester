@@ -43,6 +43,7 @@ int main(int argc, char** argv)
         Light L;
         L.position = make_vec3(config.light.position.x, config.light.position.y, config.light.position.z);
         L.color    = make_vec3(config.light.color.x,    config.light.color.y,    config.light.color.z);
+        L.intensity = config.light.intensity;
         lights.push_back(L);
     }
 
