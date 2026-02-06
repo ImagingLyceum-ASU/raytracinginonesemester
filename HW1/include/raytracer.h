@@ -16,6 +16,11 @@ struct Light {
 // Small offset to avoid self-intersection / "shadow acne"
 static constexpr float RT_EPS = 1e-4f;
 
+// Optional: point light inverse-square falloff (OFF by default to preserve scene brightness)
+#ifndef RT_USE_DISTANCE_ATTENUATION
+#define RT_USE_DISTANCE_ATTENUATION 0
+#endif
+
 HYBRID_FUNC inline Vec3 clamp(Vec3 color) {
     if (color.x > 1.0f) color.x = 1.0f;
     if (color.y > 1.0f) color.y = 1.0f;
@@ -31,7 +36,7 @@ HYBRID_FUNC inline float length3(const Vec3& v) {
 }
 
 HYBRID_FUNC inline Vec3 reflect_dir(const Vec3& I, const Vec3& N) {
-    // I points *in the ray direction* (from origin toward scene)
+    // I is the ray direction (from origin toward scene)
     // Reflection: R = I - 2*(I·N)*N
     return I - (2.0f * dot(I, N)) * N;
 }
@@ -77,88 +82,93 @@ inline bool IsInShadow(const Vec3& P,
     Ray shadowRay(P + N * RT_EPS, Ldir);
 
     HitRecord shadowHit{};
-    // Only count occluders strictly before the light !!!
+    // Only count occluders strictly before the light
     return IntersectScene(shadowRay, tris, RT_EPS, double(distToL) - RT_EPS, shadowHit);
 }
 
-// Direct lighting with hard shadows (should work with multiple lights)
+// Direct lighting with hard shadows (multiple lights supported)
 inline Vec3 ShadeDirect(const Ray& r,
                         const HitRecord& rec,
                         const std::vector<Light>& lights,
                         const std::vector<Triangle>& tris)
 {
-    // Assuming rec.hit == true already
     Vec3 N = unit_vector(rec.normal);
     Vec3 V = unit_vector(r.origin() - rec.p);
 
     Vec3 Lo = make_vec3(0,0,0);
 
-    // small ambient (looks nicer)
-    Vec3 ambient = rec.mat.albedo * 0.05f;
-    Lo = Lo + ambient;
+    // small ambient (looks nicer, not physically-based)
+    Lo = Lo + rec.mat.albedo * 0.05f;
 
-    // add emission (placeholder math for now)
+    // emission (if any)
     Lo = Lo + rec.mat.emission;
 
     for (const auto& light : lights) {
-        Vec3 L = unit_vector(light.position - rec.p);
+        Vec3 toL = light.position - rec.p;
+        float dist = length3(toL);
+        if (dist <= 0.0f) continue;
+
+        Vec3 L = toL / dist;
+
         float NdotL = fmaxf(dot(N, L), 0.0f);
         if (NdotL <= 0.0f) continue;
 
-        // Hard shadows
-        if (IsInShadow(rec.p, N, light, tris)) {
-            continue;
-        }
+        if (IsInShadow(rec.p, N, light, tris)) continue;
 
         // BRDF value
         Vec3 f = EvaluateBRDF(rec.mat, N, V, L);
 
-        // Light contribution
+        // Point light radiance
         Vec3 radiance = light.color * light.intensity;
-        Vec3 direct = (radiance * f) * NdotL;
 
-        Lo = Lo + direct;
+#if RT_USE_DISTANCE_ATTENUATION
+        // Inverse-square falloff (optional)
+        float dist2 = fmaxf(dist * dist, 1e-6f);
+        radiance = radiance / dist2;
+#endif
+
+        Lo = Lo + (radiance * f) * NdotL;
     }
 
     return Lo;
 }
 
-// Recursive tracer: direct + perfect mirror where possible
+// Recursive tracer: direct + perfect mirror reflection
 inline Vec3 TraceRay(const Ray& r,
                      const std::vector<Triangle>& tris,
                      const std::vector<Light>& lights,
                      int depth)
 {
-    // If out of bounces
     if (depth <= 0) return make_vec3(0,0,0);
 
     HitRecord rec{};
     if (!IntersectScene(r, tris, RT_EPS, std::numeric_limits<double>::infinity(), rec)) {
-        // same !rec.hit logic as before (sky gradient)
+        // Sky gradient background
         Vec3 unit_dir = unit_vector(r.direction());
         float t = 0.5f * (unit_dir.z + 1.0f);
-        return make_vec3(1.0f, 1.0f, 1.0f)*(1.0f-t) + make_vec3(0.5f, 0.7f, 1.0f)*t;
+        return make_vec3(1.0f, 1.0f, 1.0f) * (1.0f - t)
+             + make_vec3(0.5f, 0.7f, 1.0f) * t;
     }
 
-    // Geometry terms
     Vec3 N = unit_vector(rec.normal);
 
-    // 1) direct lighting (with shadows)
+    // 1) Direct BRDF lighting (with shadows)
     Vec3 Lo = ShadeDirect(r, rec, lights, tris);
 
-    // 2) perfect mirror reflection (simple recursion, we can expand this)
-    // Use mat.kr as the weight (0..1). For metals you can set kr=1 and kd=0 etc.
+    // 2) Perfect mirror reflection recursion
     if (rec.mat.kr > 0.0f) {
-        Vec3 refl = reflect_dir(unit_vector(r.direction()), N);
-        Ray rr(rec.p + N * RT_EPS, refl);
+        Vec3 I = unit_vector(r.direction());
+        Vec3 R = reflect_dir(I, N);
+
+        Ray rr(rec.p + N * RT_EPS, R);
         Vec3 bounced = TraceRay(rr, tris, lights, depth - 1);
 
-        // Tint reflection by specularColor for colored metals (more of a beauty thing)
-        Vec3 tint = rec.mat.specularColor;
-        Lo = Lo + (rec.mat.kr * (tint * bounced));
+        // Tint reflection by specularColor (colored metals)
+        Lo = Lo + (rec.mat.kr * (rec.mat.specularColor * bounced));
     }
 
-    return clamp(Lo);
+    // Clamp once when writing the final PNG.
+    return Lo;
 }
 
 #endif

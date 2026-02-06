@@ -74,8 +74,21 @@ inline HitRecord ray_intersection(const Ray& r, const Triangle& tri) {
     rec.t   = t;
     rec.p   = r.at(t);
 
-    // Interpolated normal (normalized!)
-    rec.normal = unit_vector((1.0f - u - v) * tri.n0 + u * tri.n1 + v * tri.n2);
+    // Geomatric face normal from triangle winding
+    Vec3 faceN = unit_vector(cross(edge_vec_1, edge_vec_2));
+
+    // Decide if this hit is front-face or back-face, and orient face normal
+    rec.set_face_normal(r, faceN);
+
+    // Shading normal (interpolated vertex normals)
+    Vec3 shadeN = (1.0f - u - v) * tri.n0 + u * tri.n1 + v * tri.n2;
+    shadeN = unit_vector(shadeN);
+
+    // Flip shading normal to match the chosen face orientation
+    if(!rec.front_face) shadeN = -shadeN;
+
+    // Use shading normal for BRDF + reflection + ray offsets
+    rec.normal = shadeN;
 
     // Pull material from triangle (temporary just for testing BRDF)
     rec.mat = tri.mat;
