@@ -54,11 +54,6 @@ MaterialParams parse_material(const json& node) {
         return m;
 
     const auto& mat = node["material"];
-    if (mat.contains("type")) {
-        std::string t = mat["type"].get<std::string>();
-        if (t == "metal") m.type = "metal";
-        else m.type = "lambertian";
-    }
     if (mat.contains("albedo")) {
         camera::point3 p = parse_vec3(mat["albedo"]);
         m.albedo[0] = p.x; m.albedo[1] = p.y; m.albedo[2] = p.z;
@@ -168,11 +163,6 @@ camera SceneLoader::make_camera(const CameraParams& p) {
 
 Material SceneLoader::make_material(const MaterialParams& p) {
     Material m;
-    if (p.type == "metal")
-        m.type = MAT_METAL;
-    else
-        m.type = MAT_LAMBERTIAN;
-
     m.albedo = make_vec3(p.albedo[0], p.albedo[1], p.albedo[2]);
     m.kd = p.kd;
     m.ks = p.ks;

@@ -11,7 +11,6 @@
 
 // Material parameters (corresponds to JSON "material" per node)
 struct MaterialParams {
-    std::string type = "lambertian";  // "lambertian" | "metal"
     float albedo[3] = {0.8f, 0.8f, 0.8f};
     float kd = 1.0f;
     float ks = 0.0f;
