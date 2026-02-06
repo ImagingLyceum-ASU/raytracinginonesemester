@@ -10,20 +10,23 @@ class camera {
     using vec3   = Vec3;
     using point3 = Vec3;
 
+    int pixel_width;
+    int pixel_height;
+
+    // Note: The defaults here will not be used when rendering, for the real defaults see scene_loader.h/CameraParams
     camera(point3 pos = make_vec3(0, 0, 0), 
            point3 lookAt = make_vec3(0, 1, 0),
            vec3 up = make_vec3(0, 0, 1),
            double focal_length_mm = 50.0,     // e.g. 50mm
            double sensor_height_mm = 24.0,    // e.g. 24mm (full-frame)
-           int width = 100, int height = 100)
+           double sensor_width_mm = 36.0,     // e.g. 36mm (full-frame, 3:2 aspect ratio)
+           int width = 540, int height = 360)
         : center(pos), look_at(lookAt), up_vector(up), 
           focal_length_mm(focal_length_mm), sensor_height_mm(sensor_height_mm),
+          sensor_width_mm(sensor_width_mm),
           pixel_width(width), pixel_height(height) {
-        initialize();
-    }
-
-    int pixel_width  = 100;
-    int pixel_height = 100;
+            initialize();
+          }
 
     point3 get_center() const {
         return center;
@@ -40,6 +43,7 @@ class camera {
     vec3   up_vector;           // Up vector (up direction)
     double focal_length_mm;
     double sensor_height_mm;
+    double sensor_width_mm;
     point3 pixel00_loc;         // 3D location of pixel 0, 0
     vec3   pixel_delta_u;       // Offset to pixel to the right
     vec3   pixel_delta_v;       // Offset to pixel to the bottom
@@ -69,14 +73,17 @@ class camera {
         // convert millimeters to meters (world units)
         double focal_length_m = focal_length_mm / 1000.0;
         double sensor_height_m = sensor_height_mm / 1000.0;
+        double sensor_width_m = sensor_width_mm / 1000.0;
 
         // Compute vertical field of view (vfov)
-        // vfov = 2 * atan(sensor_height / (2 * focal_length))
+        // vertical fov = 2 * atan(sensor_height / (2 * focal_length))
         // double vfov_rad = 2.0 * std::atan(sensor_height_m / (2.0 * focal_length_m));
+        // horizontal fov = 2 * atan(sensor_width / (2 * focal_length))
+        // double hfov_rad = 2.0 * std::atan(sensor_width_m / (2.0 * focal_length_m));
 
-        // Compute viewport size  (for a pinhole camera, viewport_height = sensor_height)
+        // Compute viewport size (for a pinhole camera, viewport size = sensor size)
         double viewport_height = sensor_height_m;
-        double viewport_width = viewport_height * (double(pixel_width) / double(pixel_height));
+        double viewport_width = sensor_width_m;
 
         // Calculate the vectors across the horizontal and down the vertical viewport edges.
         // viewport_u follows right, viewport_v follows down

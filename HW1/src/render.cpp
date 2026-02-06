@@ -3,6 +3,8 @@
 #include "camera.h"
 #include "ray.h"
 #include "raytracer.h"
+#include "scene_loader.h"
+#include "transform.h"
 #include "vec3.h"
 #include "material.h"
 #include "scene_loader.h"

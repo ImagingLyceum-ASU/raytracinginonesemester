@@ -88,6 +88,8 @@ SceneConfig SceneLoader::load(const std::string& json_path,
             config.camera.focal_length_mm = c["focal_length_mm"].get<double>();
         if (c.contains("sensor_height_mm"))
             config.camera.sensor_height_mm = c["sensor_height_mm"].get<double>();
+        if (c.contains("sensor_width_mm"))
+            config.camera.sensor_width_mm = c["sensor_width_mm"].get<double>();
         if (c.contains("pixel_width"))
             config.camera.pixel_width = c["pixel_width"].get<int>();
         if (c.contains("pixel_height"))
@@ -129,6 +131,6 @@ SceneConfig SceneLoader::load(const std::string& json_path,
 
 camera SceneLoader::make_camera(const CameraParams& p) {
     return camera(p.position, p.look_at, p.up,
-                  p.focal_length_mm, p.sensor_height_mm,
+                  p.focal_length_mm, p.sensor_height_mm, p.sensor_width_mm,
                   p.pixel_width, p.pixel_height);
 }

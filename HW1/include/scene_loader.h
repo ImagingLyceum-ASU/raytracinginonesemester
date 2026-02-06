@@ -23,8 +23,9 @@ struct LightParams {
 struct CameraParams {
     double focal_length_mm = 50.0;
     double sensor_height_mm = 24.0;
-    int pixel_width = 320;
-    int pixel_height = 180;
+    double sensor_width_mm = 36.0;
+    int pixel_width = 540;
+    int pixel_height = 360;
     camera::point3 position{0.0f, 0.0f, 0.0f};
     camera::point3 look_at{0.0f, 0.0f, 0.0f};
     camera::vec3 up{0.0f, 0.0f, 1.0f};
