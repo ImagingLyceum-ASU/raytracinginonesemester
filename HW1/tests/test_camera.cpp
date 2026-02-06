@@ -14,12 +14,12 @@ TEST_CASE("camera throws on invalid pixel dimensions") {
     glm::dvec3 up(0, 0, 1);
 
     REQUIRE_THROWS_AS(
-        camera(pos, lookAt, up, 50.0, 24.0, 0, 10),
+        camera(pos, lookAt, up, 50.0, 24.0, 36.0, 0, 10),
         std::runtime_error
     );
 
     REQUIRE_THROWS_AS(
-        camera(pos, lookAt, up, 50.0, 24.0, 10, 0),
+        camera(pos, lookAt, up, 50.0, 24.0, 36.0, 10, 0),
         std::runtime_error
     );
     INFO("Test 1 passed");
@@ -33,9 +33,10 @@ TEST_CASE("1x1 camera pixel lies on optical axis") {
     glm::dvec3 up(0, 1, 0);
 
     double focal_mm = 35.0;
-    double sensor_mm = 24.0;
+    double sensor_height_mm = 24.0;
+    double sensor_width_mm = 36.0;
 
-    camera cam(center, lookAt, up, focal_mm, sensor_mm, 1, 1);
+    camera cam(center, lookAt, up, focal_mm, sensor_height_mm, sensor_width_mm, 1, 1);
 
     glm::dvec3 pixel = cam.get_pixel_position(0, 0);
 
@@ -57,7 +58,7 @@ TEST_CASE("pixel grid lies in plane orthogonal to view direction") {
     glm::dvec3 lookAt(0, 0, 1);
     glm::dvec3 up(0, 1, 0);
 
-    camera cam(center, lookAt, up, 50.0, 24.0, 5, 4);
+    camera cam(center, lookAt, up, 50.0, 24.0, 36.0, 5, 4);
 
     glm::dvec3 forward = glm::normalize(lookAt - center);
 
