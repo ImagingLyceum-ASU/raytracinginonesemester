@@ -19,7 +19,16 @@
         {
             "name": "frog",
             "type": "mesh",
-            "path": "./assets/meshes/frog.obj"
+            "path": "./assets/meshes/frog.obj",
+            "material": {
+                "type": "lambertian",
+                "albedo": [0.8, 0.2, 0.2],
+                "kd": 1,
+                "ks": 0.5,
+                "specular_color": [0.04, 0.04, 0.04],
+                "shininess": 32,
+                "kr": 0
+            }
         }
     ]
 }

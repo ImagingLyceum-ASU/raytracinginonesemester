@@ -2,4 +2,4 @@
 build/
 
 # Polyscope ini file
-.ini
+*.ini

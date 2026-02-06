@@ -48,6 +48,36 @@ Transform parse_transform(const json& node) {
     return t;
 }
 
+MaterialParams parse_material(const json& node) {
+    MaterialParams m;
+    if (!node.contains("material") || !node["material"].is_object())
+        return m;
+
+    const auto& mat = node["material"];
+    if (mat.contains("type")) {
+        std::string t = mat["type"].get<std::string>();
+        if (t == "metal") m.type = "metal";
+        else m.type = "lambertian";
+    }
+    if (mat.contains("albedo")) {
+        camera::point3 p = parse_vec3(mat["albedo"]);
+        m.albedo[0] = p.x; m.albedo[1] = p.y; m.albedo[2] = p.z;
+    }
+    if (mat.contains("kd")) m.kd = static_cast<float>(mat["kd"].get<double>());
+    if (mat.contains("ks")) m.ks = static_cast<float>(mat["ks"].get<double>());
+    if (mat.contains("shininess")) m.shininess = static_cast<float>(mat["shininess"].get<double>());
+    if (mat.contains("specular_color")) {
+        camera::point3 p = parse_vec3(mat["specular_color"]);
+        m.specular_color[0] = p.x; m.specular_color[1] = p.y; m.specular_color[2] = p.z;
+    }
+    if (mat.contains("kr")) m.kr = static_cast<float>(mat["kr"].get<double>());
+    if (mat.contains("emission")) {
+        camera::point3 p = parse_vec3(mat["emission"]);
+        m.emission[0] = p.x; m.emission[1] = p.y; m.emission[2] = p.z;
+    }
+    return m;
+}
+
 std::string resolve_path(const std::string& base_dir, const std::string& path) {
     if (path.empty()) return path;
     if (path.size() >= 2 && path[0] == '.' && (path[1] == '/' || path[1] == '\\'))
@@ -122,6 +152,7 @@ SceneConfig SceneLoader::load(const std::string& json_path,
                 sn.path = resolve_path(base_dir, raw);
             }
             sn.transform = parse_transform(node);
+            sn.material = parse_material(node);
             config.scene.push_back(std::move(sn));
         }
     }
@@ -133,4 +164,21 @@ camera SceneLoader::make_camera(const CameraParams& p) {
     return camera(p.position, p.look_at, p.up,
                   p.focal_length_mm, p.sensor_height_mm, p.sensor_width_mm,
                   p.pixel_width, p.pixel_height);
+}
+
+Material SceneLoader::make_material(const MaterialParams& p) {
+    Material m;
+    if (p.type == "metal")
+        m.type = MAT_METAL;
+    else
+        m.type = MAT_LAMBERTIAN;
+
+    m.albedo = make_vec3(p.albedo[0], p.albedo[1], p.albedo[2]);
+    m.kd = p.kd;
+    m.ks = p.ks;
+    m.shininess = p.shininess;
+    m.specularColor = make_vec3(p.specular_color[0], p.specular_color[1], p.specular_color[2]);
+    m.kr = p.kr;
+    m.emission = make_vec3(p.emission[0], p.emission[1], p.emission[2]);
+    return m;
 }

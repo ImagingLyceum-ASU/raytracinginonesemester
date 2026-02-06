@@ -2,11 +2,24 @@
 #define SCENE_LOADER_H
 
 #include "camera.h"
+#include "material.h"
 #include "transform.h"
 #include "vec3.h"
 
 #include <string>
 #include <vector>
+
+// Material parameters (corresponds to JSON "material" per node)
+struct MaterialParams {
+    std::string type = "lambertian";  // "lambertian" | "metal"
+    float albedo[3] = {0.8f, 0.8f, 0.8f};
+    float kd = 1.0f;
+    float ks = 0.0f;
+    float shininess = 32.0f;
+    float specular_color[3] = {0.04f, 0.04f, 0.04f};
+    float kr = 0.0f;
+    float emission[3] = {0.0f, 0.0f, 0.0f};
+};
 
 // Global render settings (corresponds to JSON "settings")
 struct RenderSettings {
@@ -36,7 +49,8 @@ struct SceneNode {
     std::string name;
     std::string type;  // e.g. "mesh"
     std::string path;  // e.g. "./assets/meshes/frog.obj"
-    Transform transform; // per-mesh transform (optional in JSON)
+    Transform transform;   // per-mesh transform (optional in JSON)
+    MaterialParams material; // per-mesh material (optional in JSON, has defaults)
 };
 
 // Full scene config: settings + camera + light + scene
@@ -57,6 +71,9 @@ public:
 
     // Construct camera instance from CameraParams
     static camera make_camera(const CameraParams& p);
+
+    // Build Material from MaterialParams (from JSON)
+    static Material make_material(const MaterialParams& p);
 };
 
 #endif

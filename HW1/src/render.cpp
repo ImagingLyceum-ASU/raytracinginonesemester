@@ -7,8 +7,6 @@
 #include "transform.h"
 #include "vec3.h"
 #include "material.h"
-#include "scene_loader.h"
-#include "transform.h"
 #include <algorithm>
 #include <iostream>
 #include <string>
@@ -17,72 +15,6 @@
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
-
-// -------- Material presets for BRDF testing --------
-
-// Matte diffuse (pure Lambert)
-static Material matte_red() {
-    Material m;
-    m.type = MAT_LAMBERTIAN;
-    m.albedo = make_vec3(0.8f, 0.2f, 0.2f);
-    m.kd = 1.0f;
-    m.ks = 0.0f;
-    m.shininess = 1.0f;
-    m.kr = 0.0f;
-    return m;
-}
-
-// Plastic (diffuse + soft specular highlight)
-static Material plastic_red() {
-    Material m;
-    m.type = MAT_LAMBERTIAN;
-    m.albedo = make_vec3(0.8f, 0.2f, 0.2f);
-    m.kd = 1.0f;
-    m.ks = 0.25f;
-    m.specularColor = make_vec3(0.04f, 0.04f, 0.04f);
-    m.shininess = 64.0f;
-    m.kr = 0.0f; // no mirror bounce yet (still gets BRDF specular highlight)
-    return m;
-}
-
-// Glossy plastic (tight highlight)
-static Material glossy_plastic() {
-    Material m;
-    m.type = MAT_LAMBERTIAN;
-    m.albedo = make_vec3(0.8f, 0.2f, 0.2f);
-    m.kd = 1.0f;
-    m.ks = 0.5f;
-    m.specularColor = make_vec3(0.04f, 0.04f, 0.04f);
-    m.shininess = 128.0f;
-    m.kr = 0.0f;
-    return m;
-}
-
-// Brushed metal (tinted specular, no diffuse) + some mirror bounce
-static Material metal_red() {
-    Material m;
-    m.type = MAT_METAL;
-    m.albedo = make_vec3(0.8f, 0.2f, 0.2f);
-    m.kd = 0.0f;
-    m.ks = 1.0f;
-    m.specularColor = m.albedo; // metal = colored specular
-    m.shininess = 64.0f;
-    m.kr = 0.35f; // recursive reflection weight
-    return m;
-}
-
-// Mirror-like metal (very sharp) + strong recursion
-static Material mirror_metal() {
-    Material m;
-    m.type = MAT_METAL;
-    m.albedo = make_vec3(1.0f, 1.0f, 1.0f);
-    m.kd = 0.0f;
-    m.ks = 1.0f;
-    m.specularColor = m.albedo;
-    m.shininess = 512.0f;
-    m.kr = 0.95f; // recursive reflection weight
-    return m;
-}
 
 // Build triangles once per render (instead of per-pixel)
 static std::vector<Triangle> build_triangles(const MeshSOA& mesh, const Material& mat) {
@@ -194,11 +126,7 @@ int main(int argc, char** argv)
         lights.push_back(L);
     }
 
-    // 4) Pick a material to apply to everything for now (simple test)
-    //    Later we should add materials to JSON nodes and assign per-node.
-    Material mat = plastic_red();
-
-    // 5) Load all scene meshes and bake transforms into triangles
+    // 4) Load all scene meshes and bake transforms into triangles; material per node from JSON
     std::vector<Triangle> tris;
     for (const auto& node : config.scene) {
         if (node.type != "mesh" || node.path.empty()) continue;
@@ -213,6 +141,8 @@ int main(int argc, char** argv)
 
         // Apply node transform to mesh in-place (positions + normals)
         ApplyTransformToMeshSOA(mesh, node.transform);
+
+        Material mat = SceneLoader::make_material(node.material);
 
         // Convert mesh to triangles once
         const size_t indexCount = mesh.indices.size();
@@ -266,7 +196,7 @@ int main(int argc, char** argv)
     }
 
     // 7) Write PNG
-    std::string out = "scene_render.png";
+    std::string out = "output.png";
     std::cout << "\r  writing: " << out << "                         \n";
 
     std::vector<unsigned char> png_data(static_cast<size_t>(pixel_width) * static_cast<size_t>(pixel_height) * 3);
