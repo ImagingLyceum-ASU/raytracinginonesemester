@@ -2,10 +2,23 @@
 #define SCENE_LOADER_H
 
 #include "camera.h"
+#include "material.h"
+#include "transform.h"
 #include "vec3.h"
 
 #include <string>
 #include <vector>
+
+// Material parameters (corresponds to JSON "material" per node)
+struct MaterialParams {
+    float albedo[3] = {0.8f, 0.8f, 0.8f};
+    float kd = 1.0f;
+    float ks = 0.0f;
+    float shininess = 32.0f;
+    float specular_color[3] = {0.04f, 0.04f, 0.04f};
+    float kr = 0.0f;
+    float emission[3] = {0.0f, 0.0f, 0.0f};
+};
 
 // Global render settings (corresponds to JSON "settings")
 struct RenderSettings {
@@ -16,14 +29,16 @@ struct RenderSettings {
 struct LightParams {
     camera::point3 position{-3.0f, 0.0f, 1.0f};
     camera::vec3 color{1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;  // light intensity multiplier
 };
 
 // Camera parameters (corresponds to JSON "camera")
 struct CameraParams {
     double focal_length_mm = 50.0;
     double sensor_height_mm = 24.0;
-    int pixel_width = 320;
-    int pixel_height = 180;
+    double sensor_width_mm = 36.0;
+    int pixel_width = 540;
+    int pixel_height = 360;
     camera::point3 position{0.0f, 0.0f, 0.0f};
     camera::point3 look_at{0.0f, 0.0f, 0.0f};
     camera::vec3 up{0.0f, 0.0f, 1.0f};
@@ -34,6 +49,8 @@ struct SceneNode {
     std::string name;
     std::string type;  // e.g. "mesh"
     std::string path;  // e.g. "./assets/meshes/frog.obj"
+    Transform transform;   // per-mesh transform (optional in JSON)
+    MaterialParams material; // per-mesh material (optional in JSON, has defaults)
 };
 
 // Full scene config: settings + camera + light + scene
@@ -54,6 +71,9 @@ public:
 
     // Construct camera instance from CameraParams
     static camera make_camera(const CameraParams& p);
+
+    // Build Material from MaterialParams (from JSON)
+    static Material make_material(const MaterialParams& p);
 };
 
 #endif
