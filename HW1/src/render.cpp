@@ -8,6 +8,7 @@
 #include "vec3.h"
 #include "material.h"
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -107,19 +108,33 @@ int main(int argc, char** argv)
 
     const int maxDepth = std::max(1, config.settings.max_bounces);
 
+    const int samples_per_pixel = config.settings.samples_per_pixel;
     const int bar_width = 40;
+
+    auto t_start = std::chrono::steady_clock::now();
     for (int j = 0; j < pixel_height; ++j) {
         const int pct = (j + 1) * 100 / pixel_height;
         const int filled = (j + 1) * bar_width / pixel_height;
         std::cerr << "\r[" << std::string(filled, '=') << std::string(bar_width - filled, ' ') << "] " << pct << "%" << std::flush;
 
         for (int i = 0; i < pixel_width; ++i) {
-            Ray r(center, cam.get_pixel_position(i, j) - center);
-            Vec3 color = TraceRay(r, tris, lights, maxDepth);
-            image[static_cast<size_t>(j) * static_cast<size_t>(pixel_width) + static_cast<size_t>(i)] = color;
+            Vec3 pixel_color = make_vec3(0, 0, 0);
+            for (int s = 0; s < samples_per_pixel; ++s) {
+                // sub-pixel jittering: sample within the pixel to reduce aliasing and noise
+                double u = static_cast<double>(i) + random_float();
+                double v = static_cast<double>(j) + random_float();
+                Vec3 target = cam.get_pixel_position(u, v);
+                Ray r(center, target - center);
+                pixel_color = pixel_color + TraceRay(r, tris, lights, maxDepth, config.settings.diffuse_bounce);
+            }
+            image[static_cast<size_t>(j) * static_cast<size_t>(pixel_width) + static_cast<size_t>(i)] = pixel_color / static_cast<float>(samples_per_pixel);
         }
     }
     std::cerr << "\r[" << std::string(bar_width, '=') << "] 100%\n";
+
+    auto t_end = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+    std::cout << "Render time: " << elapsed << " s\n";
 
     // 7) Write PNG
     std::string out = "output.png";

@@ -3,9 +3,37 @@
 
 #include <cmath>
 #include <limits>
+#include <random>
 #include <vector>
 #include "ray.h"
 #include "brdf.h"
+
+// Random [0, 1) for diffuse sampling
+inline float random_float() {
+    static std::mt19937 gen(std::random_device{}());
+    static std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    return dist(gen);
+}
+
+inline Vec3 random_unit_vector() {
+    for (;;) {
+        float x = 2.0f * random_float() - 1.0f;
+        float y = 2.0f * random_float() - 1.0f;
+        float z = 2.0f * random_float() - 1.0f;
+        float lensq = x*x + y*y + z*z;
+        if (lensq > 1e-10f && lensq <= 1.0f) {
+            float inv = 1.0f / sqrtf(lensq);
+            return make_vec3(x * inv, y * inv, z * inv);
+        }
+    }
+}
+
+inline Vec3 random_on_hemisphere(const Vec3& normal) {
+    Vec3 on_unit_sphere = random_unit_vector();
+    if (dot(on_unit_sphere, normal) > 0.0f)
+        return on_unit_sphere;
+    return make_vec3(-on_unit_sphere.x, -on_unit_sphere.y, -on_unit_sphere.z);
+}
 
 struct Light {
     Vec3 position;
@@ -124,10 +152,12 @@ inline Vec3 ShadeDirect(const Ray& r,
 }
 
 // Recursive tracer: direct + perfect mirror where possible
+// diffuse_bounce: true = randomly select diffuse/mirror (Russian Roulette); false = only mirror
 inline Vec3 TraceRay(const Ray& r,
                      const std::vector<Triangle>& tris,
                      const std::vector<Light>& lights,
-                     int depth)
+                     int depth,
+                     bool diffuse_bounce = true)
 {
     // If out of bounces
     if (depth <= 0) return make_vec3(0,0,0);
@@ -146,16 +176,25 @@ inline Vec3 TraceRay(const Ray& r,
     // 1) direct lighting (with shadows)
     Vec3 Lo = ShadeDirect(r, rec, lights, tris);
 
-    // 2) perfect mirror reflection (simple recursion, we can expand this)
-    // Use mat.kr as the weight (0..1). For metals you can set kr=1 and kd=0 etc.
-    if (rec.mat.kr > 0.0f) {
-        Vec3 refl = reflect_dir(unit_vector(r.direction()), N);
-        Ray rr(rec.p + N * RT_EPS, refl);
-        Vec3 bounced = TraceRay(rr, tris, lights, depth - 1);
-
-        // Tint reflection by specularColor for colored metals (more of a beauty thing)
-        Vec3 tint = rec.mat.specularColor;
-        Lo = Lo + (rec.mat.kr * (tint * bounced));
+    // 2) indirect: randomly select diffuse/mirror (diffuse_bounce is true, otherwise only mirror)
+    float kd = rec.mat.kd;
+    float kr = rec.mat.kr;
+    float total = kd + kr;
+    if (total > 0.0f) {
+        float xi = random_float();
+        if (diffuse_bounce && xi < kd / total) {
+            Vec3 diffuse_dir = random_on_hemisphere(N);
+            Ray diffuse_ray(rec.p + N * RT_EPS, diffuse_dir);
+            Vec3 bounced = TraceRay(diffuse_ray, tris, lights, depth - 1, diffuse_bounce);
+            float NdotL = fmaxf(dot(N, diffuse_dir), 0.0f);
+            Lo = Lo + (rec.mat.albedo * total * 2.0f * NdotL * bounced);
+        } else if (kr > 0.0f) {
+            Vec3 refl = reflect_dir(unit_vector(r.direction()), N);
+            Ray rr(rec.p + N * RT_EPS, refl);
+            Vec3 bounced = TraceRay(rr, tris, lights, depth - 1, diffuse_bounce);
+            Vec3 tint = rec.mat.specularColor;
+            Lo = Lo + ((diffuse_bounce ? total : rec.mat.kr) * (tint * bounced));
+        }
     }
 
     return clamp(Lo);
