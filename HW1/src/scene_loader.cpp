@@ -104,6 +104,10 @@ SceneConfig SceneLoader::load(const std::string& json_path,
         const auto& s = j["settings"];
         if (s.contains("max_bounces"))
             config.settings.max_bounces = s["max_bounces"].get<int>();
+        if (s.contains("samples_per_pixel"))
+            config.settings.samples_per_pixel = s["samples_per_pixel"].get<int>();
+        if (s.contains("diffuse_bounce"))
+            config.settings.diffuse_bounce = s["diffuse_bounce"].get<bool>();
     }
 
     // camera

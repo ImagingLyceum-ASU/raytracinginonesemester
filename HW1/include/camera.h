@@ -32,9 +32,14 @@ class camera {
         return center;
     }
 
-    // Get pixel position by x, y index
+    // Get pixel position by x, y index (integer = pixel center)
     point3 get_pixel_position(int i, int j) const {
         return pixel00_loc + (double(i) * pixel_delta_u) + (double(j) * pixel_delta_v);
+    }
+
+    // Sub-pixel position for jittered sampling (i, j can be fractional, e.g. i+[0,1), j+[0,1))
+    point3 get_pixel_position(double i, double j) const {
+        return pixel00_loc + (i * pixel_delta_u) + (j * pixel_delta_v);
     }
 
   private:

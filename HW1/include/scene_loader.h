@@ -23,6 +23,8 @@ struct MaterialParams {
 // Global render settings (corresponds to JSON "settings")
 struct RenderSettings {
     int max_bounces = 8;
+    int samples_per_pixel = 100;  // more samples, less noise, slower
+    bool diffuse_bounce = true;   // if true, randomly select diffuse/mirror; if false, only mirror
 };
 
 // Light parameters (corresponds to JSON "light")

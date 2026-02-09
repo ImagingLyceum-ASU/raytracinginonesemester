@@ -1,6 +1,8 @@
 {
     "settings": {
-        "max_bounces": 8
+        "max_bounces": 4,
+        "samples_per_pixel": 1,
+        "diffuse_bounce": false
     },
     "camera": {
         "focal_length_mm": 24.0,
