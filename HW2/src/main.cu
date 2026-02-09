@@ -72,7 +72,7 @@ static inline Vec3 rotateXYZ(Vec3 v, const Vec3& rotationDeg) {
     return v;
 }
 
-static void applyObjectTransform(Mesh& mesh, const SceneObject& obj) {
+static inline void applyObjectTransform(Mesh& mesh, const SceneObject& obj) {
     for (auto& p : mesh.positions) {
         Vec3 scaled = make_vec3(p.x * obj.scale.x, p.y * obj.scale.y, p.z * obj.scale.z);
         Vec3 rotated = rotateXYZ(scaled, obj.rotation);
@@ -275,7 +275,6 @@ int main(int argc, char** argv)
             TriangleIndices.begin());
 
         // --- GPU Warmup (Lightweight) ---
-        // Instead of running the full build (which modifies data), we run a dummy sort.
         // This initializes Thrust's internal allocators and kernels without touching real data.
         warmupGPU();
 
@@ -291,7 +290,7 @@ int main(int argc, char** argv)
         cudaDeviceSynchronize();
         auto end_gpu = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> ms_gpu = end_gpu - start_gpu;
-        printf("GPU LBVH Build Time (warm restart): %.3f ms\n", ms_gpu.count());
+        printf("GPU LBVH Build Time: %.3f ms\n", ms_gpu.count());
 
     #else
         SceneBoundingBox = std::accumulate(
@@ -403,9 +402,13 @@ int main(int argc, char** argv)
 
         h_tris[i] = Triangle(globalMesh.positions[i0], globalMesh.positions[i1], globalMesh.positions[i2], n0, n1, n2);
     }
+    auto start_render = std::chrono::high_resolution_clock::now();
     render(P, img_w, img_h, cam, miss_color, max_depth, spp, bvhState.Nodes, bvhState.AABBs, h_tris.data(),
            globalMesh.triangleObjIds.data(), objectMaterials.data(), num_object_materials,
            render_lights.data(), num_lights, diffuse_bounce, image.data());
+    auto end_render = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> ms_render = end_render - start_render;
+    printf("CPU Render Time: %.3f ms\n", ms_render.count());
 #endif
 
 
@@ -430,7 +433,4 @@ int main(int argc, char** argv)
     printf("Image saved to render.png\n");
 
     return 0;
-
-
-
 }

@@ -1,7 +1,7 @@
 {
     "settings": {
         "max_bounces": 4,
-        "spp": 512,
+        "spp": 1,
         "diffuse_bounce": true
     },
     "miss_color": [0.5, 0.7, 1.0],

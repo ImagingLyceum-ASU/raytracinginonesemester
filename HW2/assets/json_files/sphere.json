@@ -1,7 +1,8 @@
 {
     "settings": {
-        "max_bounces": 8,
-        "spp": 360
+        "max_bounces": 4,
+        "spp": 128,
+        "diffuse_bounce": false
     },
     "miss_color": [0.5, 0.7, 1.0],
     "camera": {
@@ -50,7 +51,7 @@
                 "kd": 0,
                 "ks": 1,
                 "specular_color": [0.8, 0.2, 0.2],
-                "shininess": 64,
+                "shininess": 1000,
                 "kr": 0.35
             }
         },
@@ -68,7 +69,7 @@
                 "kd": 0,
                 "ks": 1,
                 "specular_color": [1, 1, 1],
-                "shininess": 512,
+                "shininess": 100000,
                 "kr": 0.95
             }
         },

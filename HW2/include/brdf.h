@@ -34,7 +34,7 @@ HYBRID_FUNC inline Vec3 EvaluateBRDF(const HitRecord& rec,
     float specNorm = (m.shininess + 2.0f) * inv2Pi;
     float specLobe = specNorm * powf(NdotH, m.shininess);
 
-    Vec3 fs = m.specularColor * (m.ks * specLobe);
+    Vec3 fs = m.specularColor * (m.ks) * specLobe;
 
     return fd + fs;
 }
