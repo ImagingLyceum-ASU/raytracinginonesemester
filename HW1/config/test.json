@@ -6,14 +6,14 @@
   },
   "camera": {
     "focal_length_mm": 24.0,
-    "pixel_width": 360,
-    "pixel_height": 240,
-    "position": [0.0, -3.6, 1.25],
+    "pixel_width": 540,
+    "pixel_height": 360,
+    "position": [0.0, -4.2, 1.25],
     "look_at": [0.0, 0.0, 0.45],
     "up": [0.0, 0.0, 1.0]
   },
   "light": {
-    "position": [-2.5, -2.0, 2.2],
+    "position": [-2.8, -2.2, 2.2],
     "color": [1.0, 1.0, 1.0],
     "intensity": 6.0,
     "radius": 0.0,
@@ -21,12 +21,12 @@
   },
   "scene": [
     {
-      "name": "sphere_diffuse",
+      "name": "sphere_0_diffuse",
       "type": "mesh",
       "path": "./assets/meshes/sphere.obj",
-      "transform": { "position": [-1.75, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
+      "transform": { "position": [-2.1, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
       "material": {
-        "albedo": [0.75, 0.75, 0.75],
+        "albedo": [0.85, 0.15, 0.15],
         "kd": 1.0,
         "ks": 0.0,
         "specular_color": [0.04, 0.04, 0.04],
@@ -35,68 +35,68 @@
       }
     },
     {
-      "name": "sphere_matte_sheen",
+      "name": "sphere_1_matte_spec",
       "type": "mesh",
       "path": "./assets/meshes/sphere.obj",
-      "transform": { "position": [-1.05, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
+      "transform": { "position": [-1.4, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
       "material": {
-        "albedo": [0.75, 0.75, 0.75],
+        "albedo": [0.85, 0.15, 0.15],
         "kd": 1.0,
         "ks": 0.15,
         "specular_color": [0.04, 0.04, 0.04],
-        "shininess": 32,
+        "shininess": 16,
         "kr": 0.0
       }
     },
     {
-      "name": "sphere_plastic_glossy",
+      "name": "sphere_2_plastic",
       "type": "mesh",
       "path": "./assets/meshes/sphere.obj",
-      "transform": { "position": [-0.35, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
+      "transform": { "position": [-0.7, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
       "material": {
-        "albedo": [0.75, 0.75, 0.75],
+        "albedo": [0.85, 0.15, 0.15],
         "kd": 0.9,
-        "ks": 0.8,
+        "ks": 0.6,
         "specular_color": [0.04, 0.04, 0.04],
-        "shininess": 128,
+        "shininess": 64,
         "kr": 0.0
       }
     },
     {
-      "name": "sphere_clearcoat_like",
+      "name": "sphere_3_glossy",
       "type": "mesh",
       "path": "./assets/meshes/sphere.obj",
-      "transform": { "position": [0.35, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
+      "transform": { "position": [0.0, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
       "material": {
-        "albedo": [0.75, 0.75, 0.75],
+        "albedo": [0.85, 0.15, 0.15],
         "kd": 0.7,
         "ks": 1.0,
-        "specular_color": [0.06, 0.06, 0.06],
-        "shininess": 256,
+        "specular_color": [0.04, 0.04, 0.04],
+        "shininess": 128,
         "kr": 0.15
       }
     },
     {
-      "name": "sphere_metal_tinted",
+      "name": "sphere_4_reflective",
       "type": "mesh",
       "path": "./assets/meshes/sphere.obj",
-      "transform": { "position": [1.05, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
+      "transform": { "position": [0.7, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
       "material": {
-        "albedo": [0.75, 0.75, 0.75],
-        "kd": 0.0,
+        "albedo": [0.85, 0.15, 0.15],
+        "kd": 0.4,
         "ks": 1.0,
-        "specular_color": [0.90, 0.70, 0.25],
+        "specular_color": [0.04, 0.04, 0.04],
         "shininess": 256,
-        "kr": 0.55
+        "kr": 0.6
       }
     },
     {
-      "name": "sphere_mirror",
+      "name": "sphere_5_mirror",
       "type": "mesh",
       "path": "./assets/meshes/sphere.obj",
-      "transform": { "position": [1.75, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
+      "transform": { "position": [1.4, 0.0, 0.5], "rotation": [0, 0, 0], "scale": [0.5, 0.5, 0.5] },
       "material": {
-        "albedo": [0.75, 0.75, 0.75],
+        "albedo": [0.85, 0.15, 0.15],
         "kd": 0.0,
         "ks": 1.0,
         "specular_color": [1.0, 1.0, 1.0],
@@ -109,7 +109,7 @@
       "name": "ground",
       "type": "mesh",
       "path": "./assets/meshes/plane_5x5.obj",
-      "transform": { "position": [0.0, 0.0, 0.0], "rotation": [0, 0, 0], "scale": [1.2, 1.2, 1.0] },
+      "transform": { "position": [0.0, 0.0, 0.0], "rotation": [0, 0, 0], "scale": [1.4, 1.4, 1.0] },
       "material": {
         "albedo": [0.55, 0.55, 0.55],
         "kd": 1.0,
