@@ -121,7 +121,7 @@ static void print_pixel_positions(const camera& cam) {
 
 int main(int argc, char** argv) {
     // Load scene config from JSON, default config/frog.json
-    std::string config_path = "config/frog.json";
+    std::string config_path = "config/sphere_area.json";
     if (argc >= 2) config_path = argv[1];
 
     std::string base_dir = ".";

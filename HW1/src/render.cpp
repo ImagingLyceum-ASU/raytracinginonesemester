@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include <limits>
+#include <filesystem>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -21,7 +22,7 @@
 int main(int argc, char** argv)
 {
     // 1) Choose scene JSON
-    std::string config_path = "config/sphere.json";
+    std::string config_path = "config/sphere_area.json";
     if (argc >= 2) config_path = argv[1];
 
     // Run from project root
@@ -45,6 +46,8 @@ int main(int argc, char** argv)
         L.position = make_vec3(config.light.position.x, config.light.position.y, config.light.position.z);
         L.color    = make_vec3(config.light.color.x,    config.light.color.y,    config.light.color.z);
         L.intensity = config.light.intensity;
+		L.radius = config.light.radius;
+		L.shadow_samples = config.light.shadow_samples;
         lights.push_back(L);
     }
 
@@ -120,9 +123,13 @@ int main(int argc, char** argv)
         for (int i = 0; i < pixel_width; ++i) {
             Vec3 pixel_color = make_vec3(0, 0, 0);
             for (int s = 0; s < samples_per_pixel; ++s) {
-                // sub-pixel jittering: sample within the pixel to reduce aliasing and noise
-                double u = static_cast<double>(i) + random_float();
-                double v = static_cast<double>(j) + random_float();
+                // sub-pixel jittering only when spp > 1; otherwise sample pixel center
+				double du = (samples_per_pixel > 1) ? random_float() : 0.5;
+				double dv = (samples_per_pixel > 1) ? random_float() : 0.5;
+
+				double u = static_cast<double>(i) + du;
+				double v = static_cast<double>(j) + dv;
+
                 Vec3 target = cam.get_pixel_position(u, v);
                 Ray r(center, target - center);
                 pixel_color = pixel_color + TraceRay(r, tris, lights, maxDepth, config.settings.diffuse_bounce);
@@ -136,9 +143,16 @@ int main(int argc, char** argv)
     double elapsed = std::chrono::duration<double>(t_end - t_start).count();
     std::cout << "Render time: " << elapsed << " s\n";
 
-    // 7) Write PNG
-    std::string out = "output.png";
-    std::cout << "writing: " << out << "\n";
+	// 7) Write PNG: put all renders in output/
+	namespace fs = std::filesystem;
+
+	fs::path json_path(config_path);
+	std::string stem = json_path.stem().string();
+
+	fs::path out_path = fs::path("output") / (stem + "_output.png");
+	std::string out = out_path.string();
+
+	std::cout << "writing: " << out << "\n";
 
     std::vector<unsigned char> png_data(static_cast<size_t>(pixel_width) * static_cast<size_t>(pixel_height) * 3);
     for (int k = 0; k < pixel_width * pixel_height; ++k) {

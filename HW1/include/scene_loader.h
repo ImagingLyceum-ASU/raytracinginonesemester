@@ -32,6 +32,8 @@ struct LightParams {
     camera::point3 position{-3.0f, 0.0f, 1.0f};
     camera::vec3 color{1.0f, 1.0f, 1.0f};
     float intensity = 1.0f;  // light intensity multiplier
+    float radius = 0.0f;          // 0 = point light, >0 = area light radius
+    int shadow_samples = 1;       // e.g. 1 (hard), 8, 16, 32
 };
 
 // Camera parameters (corresponds to JSON "camera")

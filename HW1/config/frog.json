@@ -13,7 +13,9 @@
     },
     "light": {
         "position": [-3.0, 0.0, 1.0],
-        "color": [1.0, 1.0, 1.0]
+        "color": [1.0, 1.0, 1.0],
+        "radius": 0.0,
+        "shadow_samples": 1
     },
     "scene": [
         {

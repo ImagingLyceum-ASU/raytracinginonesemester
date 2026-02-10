@@ -13,9 +13,11 @@
         "up": [0.0, 0.0, 1.0]
     },
     "light": {
-        "position": [-2.0, -1.0, 1.5],
+        "position": [-0.5, -0.5, 6],
         "color": [1.0, 1.0, 1.0],
-        "intensity": 5.0
+        "intensity": 5.0,
+        "radius": 0.0,
+        "shadow_samples": 1
     },
     "scene": [
         {

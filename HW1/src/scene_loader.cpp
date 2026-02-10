@@ -140,6 +140,10 @@ SceneConfig SceneLoader::load(const std::string& json_path,
             config.light.color = parse_vec3(l["color"]);
         if (l.contains("intensity"))
             config.light.intensity = static_cast<float>(l["intensity"].get<double>());
+        if (l.contains("radius"))
+            config.light.radius = static_cast<float>(l["radius"].get<double>());
+        if (l.contains("shadow_samples"))
+            config.light.shadow_samples = l["shadow_samples"].get<int>();
     }
 
     // scene

@@ -16,7 +16,7 @@ struct Material {
     // Reflectance
     float kr            = 0.0f;
 
-    // Emission (we will need to update this later, basic placeholder for now)
+    // Emission
     Vec3  emission      = make_vec3(0.0f, 0.0f, 0.0f);
 };
 
