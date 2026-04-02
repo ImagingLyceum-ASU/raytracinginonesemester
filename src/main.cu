@@ -22,6 +22,7 @@
 #include <chrono>
 #include <fstream>
 #include <cmath>
+#include <algorithm>
 
 #ifdef __CUDACC__
 #include <optix.h>
@@ -123,6 +124,55 @@ static inline void applyObjectTransform(Mesh& mesh, const SceneObject& obj) {
     }
 }
 
+static bool loadRawScalarField(const std::string& path,
+                               int nx, int ny, int nz,
+                               int format,
+                               std::vector<float>& out_values,
+                               std::string* err)
+{
+    if (nx <= 0 || ny <= 0 || nz <= 0) {
+        if (err) *err = "raw grid resolution must be positive in all dimensions";
+        return false;
+    }
+
+    const size_t voxel_count =
+        static_cast<size_t>(nx) * static_cast<size_t>(ny) * static_cast<size_t>(nz);
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        if (err) *err = "Failed to open raw grid file: " + path;
+        return false;
+    }
+
+    out_values.clear();
+    out_values.resize(voxel_count, 0.0f);
+
+    if (format == VOLUME_DENSITY_U8) {
+        std::vector<unsigned char> raw_bytes(voxel_count, 0u);
+        file.read(reinterpret_cast<char*>(raw_bytes.data()), static_cast<std::streamsize>(voxel_count));
+        if (file.gcount() != static_cast<std::streamsize>(voxel_count)) {
+            if (err) *err = "Raw grid size does not match expected voxel count for u8 data";
+            return false;
+        }
+        for (size_t i = 0; i < voxel_count; ++i) {
+            out_values[i] = static_cast<float>(raw_bytes[i]) / 255.0f;
+        }
+        return true;
+    }
+
+    if (format == VOLUME_DENSITY_F32) {
+        file.read(reinterpret_cast<char*>(out_values.data()),
+                  static_cast<std::streamsize>(voxel_count * sizeof(float)));
+        if (file.gcount() != static_cast<std::streamsize>(voxel_count * sizeof(float))) {
+            if (err) *err = "Raw grid size does not match expected voxel count for f32 data";
+            return false;
+        }
+        return true;
+    }
+
+    if (err) *err = "Unsupported raw grid format; use 'u8' or 'f32'";
+    return false;
+}
+
 int main(int argc, char** argv)
 {
     using vec3 = Vec3;
@@ -156,6 +206,25 @@ int main(int argc, char** argv)
     std::vector<SceneObject> load_objects;
     Scene scene;
     bool has_scene = false;
+    std::string scene_base_dir = ".";
+    std::string scene_project_dir = ".";
+    auto file_exists = [](const std::string& p) {
+        std::ifstream f(p);
+        return static_cast<bool>(f);
+    };
+    auto resolve_scene_path = [&](const std::string& path) -> std::string {
+        if (path.empty() || SceneIO::is_abs_path(path)) return path;
+        const std::string scene_relative = SceneIO::join_path(scene_base_dir, path);
+        std::string project_relative = path;
+        if (project_relative.rfind("./", 0) == 0)
+            project_relative = project_relative.substr(2);
+        project_relative = SceneIO::join_path(scene_project_dir, project_relative);
+
+        if (file_exists(scene_relative)) return scene_relative;
+        if (file_exists(path)) return path;
+        if (file_exists(project_relative)) return project_relative;
+        return scene_relative;
+    };
     if (pos_argc >= 2) {
         std::string first = positional_args[0];
         const bool is_scene =
@@ -168,29 +237,12 @@ int main(int argc, char** argv)
                 return 1;
             }
             has_scene = true;
-            const std::string base_dir = SceneIO::dirname(first);
-            const std::string project_dir = SceneIO::dirname(SceneIO::dirname(base_dir));
-            auto file_exists = [](const std::string& p) {
-                std::ifstream f(p);
-                return static_cast<bool>(f);
-            };
+            scene_base_dir = SceneIO::dirname(first);
+            scene_project_dir = SceneIO::dirname(SceneIO::dirname(scene_base_dir));
             for (const auto& obj : scene.objects) {
                 if (!obj.type.empty() && obj.type != "mesh" && obj.type != "volume") continue;
                 SceneObject resolved = obj;
-                std::string path = resolved.path;
-                if (!SceneIO::is_abs_path(path)) {
-                    const std::string scene_relative = SceneIO::join_path(base_dir, path);
-                    std::string project_relative = path;
-                    if (project_relative.rfind("./", 0) == 0)
-                        project_relative = project_relative.substr(2);
-                    project_relative = SceneIO::join_path(project_dir, project_relative);
-
-                    if (file_exists(scene_relative)) path = scene_relative;
-                    else if (file_exists(path)) { /* keep cwd-relative */ }
-                    else if (file_exists(project_relative)) path = project_relative;
-                    else path = scene_relative;
-                }
-                resolved.path = path;
+                resolved.path = resolve_scene_path(resolved.path);
                 load_objects.push_back(resolved);
             }
         } else {
@@ -354,12 +406,109 @@ int main(int argc, char** argv)
 
     // Extract volume regions from scene
     std::vector<VolumeRegionGPU> volumeRegionsList;
+    std::vector<std::vector<float>> hostVolumeDensityBuffers;
+    std::vector<std::vector<float>> hostVolumeTemperatureBuffers;
+    std::vector<std::vector<float>> hostVolumeFlameBuffers;
     if (has_scene && !scene.volumes.empty()) {
         for (const auto& vol : scene.volumes) {
             VolumeRegionGPU gpuVol;
             gpuVol.min_bounds = vol.min_bounds;
             gpuVol.max_bounds = vol.max_bounds;
             gpuVol.medium = vol.medium;
+            gpuVol.density_scale = vol.density_scale;
+            gpuVol.density_majorant = vol.density_majorant;
+            gpuVol.temperature_scale = vol.temperature_scale;
+            gpuVol.flame_scale = vol.flame_scale;
+            gpuVol.emission_scale = vol.emission_scale;
+            gpuVol.emission_temp_min = vol.emission_temp_min;
+            gpuVol.emission_temp_max = vol.emission_temp_max;
+
+            hostVolumeDensityBuffers.emplace_back();
+            hostVolumeTemperatureBuffers.emplace_back();
+            hostVolumeFlameBuffers.emplace_back();
+            const int volume_idx = static_cast<int>(volumeRegionsList.size());
+
+            if (vol.has_density_grid()) {
+                std::vector<float> density_values;
+                std::string density_err;
+                const std::string density_path = resolve_scene_path(vol.density_file);
+                if (!loadRawScalarField(density_path, vol.density_nx, vol.density_ny, vol.density_nz,
+                                        vol.density_format, density_values, &density_err)) {
+                    std::cerr << "Failed to load raw volume density: " << density_err << "\n";
+                    return 1;
+                }
+
+                const float max_density = density_values.empty()
+                    ? 0.0f
+                    : *std::max_element(density_values.begin(), density_values.end());
+                const float sigma_t_max = fmaxf(vol.medium.sigma_t.x,
+                    fmaxf(vol.medium.sigma_t.y, vol.medium.sigma_t.z));
+
+                hostVolumeDensityBuffers[volume_idx] = std::move(density_values);
+                gpuVol.density_data = hostVolumeDensityBuffers[volume_idx].data();
+                gpuVol.density_nx = vol.density_nx;
+                gpuVol.density_ny = vol.density_ny;
+                gpuVol.density_nz = vol.density_nz;
+                if (gpuVol.density_majorant <= 0.0f) {
+                    gpuVol.density_majorant = max_density * gpuVol.density_scale * sigma_t_max;
+                }
+
+                printf("Loaded raw density grid: %s (%dx%dx%d, majorant %.4f)\n",
+                       density_path.c_str(),
+                       gpuVol.density_nx, gpuVol.density_ny, gpuVol.density_nz,
+                       gpuVol.density_majorant);
+                if (gpuVol.emission_scale > 0.0f) {
+                    printf("  Volume emission: scale=%.2f, temp=[%.0f, %.0f] K\n",
+                           gpuVol.emission_scale, gpuVol.emission_temp_min, gpuVol.emission_temp_max);
+                }
+            }
+
+            if (vol.has_temperature_grid()) {
+                std::string temperature_err;
+                const std::string temperature_path = resolve_scene_path(vol.temperature_file);
+                if (!loadRawScalarField(temperature_path,
+                                        vol.temperature_nx, vol.temperature_ny, vol.temperature_nz,
+                                        vol.temperature_format,
+                                        hostVolumeTemperatureBuffers[volume_idx],
+                                        &temperature_err)) {
+                    std::cerr << "Failed to load raw volume temperature: " << temperature_err << "\n";
+                    return 1;
+                }
+
+                gpuVol.temperature_data = hostVolumeTemperatureBuffers[volume_idx].data();
+                gpuVol.temperature_nx = vol.temperature_nx;
+                gpuVol.temperature_ny = vol.temperature_ny;
+                gpuVol.temperature_nz = vol.temperature_nz;
+
+                printf("Loaded raw temperature grid: %s (%dx%dx%d, scale %.4f)\n",
+                       temperature_path.c_str(),
+                       gpuVol.temperature_nx, gpuVol.temperature_ny, gpuVol.temperature_nz,
+                       gpuVol.temperature_scale);
+            }
+
+            if (vol.has_flame_grid()) {
+                std::string flame_err;
+                const std::string flame_path = resolve_scene_path(vol.flame_file);
+                if (!loadRawScalarField(flame_path,
+                                        vol.flame_nx, vol.flame_ny, vol.flame_nz,
+                                        vol.flame_format,
+                                        hostVolumeFlameBuffers[volume_idx],
+                                        &flame_err)) {
+                    std::cerr << "Failed to load raw volume flames: " << flame_err << "\n";
+                    return 1;
+                }
+
+                gpuVol.flame_data = hostVolumeFlameBuffers[volume_idx].data();
+                gpuVol.flame_nx = vol.flame_nx;
+                gpuVol.flame_ny = vol.flame_ny;
+                gpuVol.flame_nz = vol.flame_nz;
+
+                printf("Loaded raw flame grid: %s (%dx%dx%d, scale %.4f)\n",
+                       flame_path.c_str(),
+                       gpuVol.flame_nx, gpuVol.flame_ny, gpuVol.flame_nz,
+                       gpuVol.flame_scale);
+            }
+
             volumeRegionsList.push_back(gpuVol);
         }
     }
@@ -445,9 +594,52 @@ int main(int argc, char** argv)
 
     // ---- Upload volume regions to GPU ----
     VolumeRegionGPU* d_volumeRegions = nullptr;
+    std::vector<float*> d_volumeDensityPtrs;
+    std::vector<float*> d_volumeTemperaturePtrs;
+    std::vector<float*> d_volumeFlamePtrs;
     if (numVolumeRegions > 0) {
+        std::vector<VolumeRegionGPU> deviceVolumeRegions = volumeRegionsList;
+        d_volumeDensityPtrs.resize(numVolumeRegions, nullptr);
+        d_volumeTemperaturePtrs.resize(numVolumeRegions, nullptr);
+        d_volumeFlamePtrs.resize(numVolumeRegions, nullptr);
+        for (int i = 0; i < numVolumeRegions; ++i) {
+            if (!volumeRegionsList[i].has_density_grid()) continue;
+            const size_t voxel_count =
+                static_cast<size_t>(volumeRegionsList[i].density_nx) *
+                static_cast<size_t>(volumeRegionsList[i].density_ny) *
+                static_cast<size_t>(volumeRegionsList[i].density_nz);
+            const size_t density_bytes = voxel_count * sizeof(float);
+            CHECK_CUDA((cudaMalloc(&d_volumeDensityPtrs[i], density_bytes)), true);
+            CHECK_CUDA((cudaMemcpy(d_volumeDensityPtrs[i], hostVolumeDensityBuffers[i].data(),
+                                   density_bytes, cudaMemcpyHostToDevice)), true);
+            deviceVolumeRegions[i].density_data = d_volumeDensityPtrs[i];
+        }
+        for (int i = 0; i < numVolumeRegions; ++i) {
+            if (!volumeRegionsList[i].has_temperature_grid()) continue;
+            const size_t voxel_count =
+                static_cast<size_t>(volumeRegionsList[i].temperature_nx) *
+                static_cast<size_t>(volumeRegionsList[i].temperature_ny) *
+                static_cast<size_t>(volumeRegionsList[i].temperature_nz);
+            const size_t grid_bytes = voxel_count * sizeof(float);
+            CHECK_CUDA((cudaMalloc(&d_volumeTemperaturePtrs[i], grid_bytes)), true);
+            CHECK_CUDA((cudaMemcpy(d_volumeTemperaturePtrs[i], hostVolumeTemperatureBuffers[i].data(),
+                                   grid_bytes, cudaMemcpyHostToDevice)), true);
+            deviceVolumeRegions[i].temperature_data = d_volumeTemperaturePtrs[i];
+        }
+        for (int i = 0; i < numVolumeRegions; ++i) {
+            if (!volumeRegionsList[i].has_flame_grid()) continue;
+            const size_t voxel_count =
+                static_cast<size_t>(volumeRegionsList[i].flame_nx) *
+                static_cast<size_t>(volumeRegionsList[i].flame_ny) *
+                static_cast<size_t>(volumeRegionsList[i].flame_nz);
+            const size_t grid_bytes = voxel_count * sizeof(float);
+            CHECK_CUDA((cudaMalloc(&d_volumeFlamePtrs[i], grid_bytes)), true);
+            CHECK_CUDA((cudaMemcpy(d_volumeFlamePtrs[i], hostVolumeFlameBuffers[i].data(),
+                                   grid_bytes, cudaMemcpyHostToDevice)), true);
+            deviceVolumeRegions[i].flame_data = d_volumeFlamePtrs[i];
+        }
         CHECK_CUDA((cudaMalloc(&d_volumeRegions, sizeof(VolumeRegionGPU) * numVolumeRegions)), true);
-        CHECK_CUDA((cudaMemcpy(d_volumeRegions, volumeRegionsList.data(),
+        CHECK_CUDA((cudaMemcpy(d_volumeRegions, deviceVolumeRegions.data(),
                                sizeof(VolumeRegionGPU) * numVolumeRegions, cudaMemcpyHostToDevice)), true);
     }
 
@@ -778,6 +970,9 @@ int main(int argc, char** argv)
     cudaFree(d_object_materials);
     if (d_objectMedia) cudaFree(d_objectMedia);
     if (d_volumeRegions) cudaFree(d_volumeRegions);
+    for (auto* p : d_volumeDensityPtrs) { if (p) cudaFree(p); }
+    for (auto* p : d_volumeTemperaturePtrs) { if (p) cudaFree(p); }
+    for (auto* p : d_volumeFlamePtrs) { if (p) cudaFree(p); }
     if (d_textures) cudaFree(d_textures);
     for (auto* p : d_texPixelPtrs) { if (p) cudaFree(p); }
 #else

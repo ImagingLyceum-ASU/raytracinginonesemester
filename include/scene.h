@@ -13,6 +13,7 @@
 #include "camera.h"
 #include "material.h"
 #include "medium.h"
+#include "volume_common.h"
 
 struct SceneSettings {
     int max_depth = 1;
@@ -59,12 +60,69 @@ struct VolumeRegion {
     Vec3 min_bounds;
     Vec3 max_bounds;
     HomogeneousMedium medium;
-    
+    std::string density_file;
+    int density_nx = 0;
+    int density_ny = 0;
+    int density_nz = 0;
+    int density_format = VOLUME_DENSITY_NONE;
+    float density_scale = 1.0f;
+    float density_majorant = -1.0f;
+
+    std::string temperature_file;
+    int temperature_nx = 0;
+    int temperature_ny = 0;
+    int temperature_nz = 0;
+    int temperature_format = VOLUME_DENSITY_NONE;
+    float temperature_scale = 1.0f;
+
+    std::string flame_file;
+    int flame_nx = 0;
+    int flame_ny = 0;
+    int flame_nz = 0;
+    int flame_format = VOLUME_DENSITY_NONE;
+    float flame_scale = 1.0f;
+
+    // Emission from volume (blackbody derived from temperature/flame channels)
+    float emission_scale = 0.0f;      // 0 = no emission
+    float emission_temp_min = 500.0f;  // Kelvin (maps to temperature=0)
+    float emission_temp_max = 2500.0f; // Kelvin (maps to temperature=1)
+
     // Check if point is inside this volume
     HYBRID_FUNC inline bool contains(const Vec3& p) const {
         return p.x >= min_bounds.x && p.x <= max_bounds.x &&
                p.y >= min_bounds.y && p.y <= max_bounds.y &&
                p.z >= min_bounds.z && p.z <= max_bounds.z;
+    }
+
+    inline bool has_density_grid() const {
+        return !density_file.empty() && density_nx > 0 && density_ny > 0 && density_nz > 0;
+    }
+
+    inline size_t density_voxel_count() const {
+        return static_cast<size_t>(density_nx) *
+               static_cast<size_t>(density_ny) *
+               static_cast<size_t>(density_nz);
+    }
+
+    inline bool has_temperature_grid() const {
+        return !temperature_file.empty() &&
+               temperature_nx > 0 && temperature_ny > 0 && temperature_nz > 0;
+    }
+
+    inline size_t temperature_voxel_count() const {
+        return static_cast<size_t>(temperature_nx) *
+               static_cast<size_t>(temperature_ny) *
+               static_cast<size_t>(temperature_nz);
+    }
+
+    inline bool has_flame_grid() const {
+        return !flame_file.empty() && flame_nx > 0 && flame_ny > 0 && flame_nz > 0;
+    }
+
+    inline size_t flame_voxel_count() const {
+        return static_cast<size_t>(flame_nx) *
+               static_cast<size_t>(flame_ny) *
+               static_cast<size_t>(flame_nz);
     }
 };
 
@@ -251,17 +309,145 @@ inline bool json_as_vec3(const JsonValue& v, Vec3& out) {
     return true;
 }
 
+inline bool json_as_spectrum(const JsonValue& v, Vec3& out) {
+    if (v.type == JsonValue::Type::Number) {
+        const float c = static_cast<float>(v.num);
+        out = make_vec3(c, c, c);
+        return true;
+    }
+    return json_as_vec3(v, out);
+}
+
+inline bool json_as_int3(const JsonValue& v, int& x, int& y, int& z) {
+    if (v.type != JsonValue::Type::Array || v.arr.size() != 3) return false;
+    if (v.arr[0].type != JsonValue::Type::Number) return false;
+    if (v.arr[1].type != JsonValue::Type::Number) return false;
+    if (v.arr[2].type != JsonValue::Type::Number) return false;
+    x = static_cast<int>(v.arr[0].num);
+    y = static_cast<int>(v.arr[1].num);
+    z = static_cast<int>(v.arr[2].num);
+    return true;
+}
+
+inline int parse_density_format_string(const std::string& s) {
+    if (s == "u8" || s == "uint8" || s == "byte") return VOLUME_DENSITY_U8;
+    if (s == "f32" || s == "float" || s == "float32") return VOLUME_DENSITY_F32;
+    return VOLUME_DENSITY_NONE;
+}
+
 // Helper: parse a "medium" JSON object into a HomogeneousMedium
 inline void parse_medium(const JsonValue& medObj, HomogeneousMedium& med) {
     const JsonValue* v = nullptr;
-    if (json_get(medObj, "sigma_a", &v) && v->type == JsonValue::Type::Number)
-        med.sigma_a = static_cast<float>(v->num);
-    if (json_get(medObj, "sigma_s", &v) && v->type == JsonValue::Type::Number)
-        med.sigma_s = static_cast<float>(v->num);
+    Vec3 sigma_t_override = make_vec3(0.0f, 0.0f, 0.0f);
+    bool has_sigma_a = false;
+    bool has_sigma_s = false;
+    bool has_sigma_t = false;
+
+    if (json_get(medObj, "sigma_a", &v) && json_as_spectrum(*v, med.sigma_a))
+        has_sigma_a = true;
+    if (json_get(medObj, "sigma_s", &v) && json_as_spectrum(*v, med.sigma_s))
+        has_sigma_s = true;
+    if (json_get(medObj, "sigma_t", &v) && json_as_spectrum(*v, sigma_t_override))
+        has_sigma_t = true;
     if (json_get(medObj, "g", &v) && v->type == JsonValue::Type::Number)
         med.g = static_cast<float>(v->num);
+
+    if (has_sigma_t && has_sigma_a && !has_sigma_s) {
+        med.sigma_s = make_vec3(
+            fmaxf(0.0f, sigma_t_override.x - med.sigma_a.x),
+            fmaxf(0.0f, sigma_t_override.y - med.sigma_a.y),
+            fmaxf(0.0f, sigma_t_override.z - med.sigma_a.z));
+    } else if (has_sigma_t && has_sigma_s && !has_sigma_a) {
+        med.sigma_a = make_vec3(
+            fmaxf(0.0f, sigma_t_override.x - med.sigma_s.x),
+            fmaxf(0.0f, sigma_t_override.y - med.sigma_s.y),
+            fmaxf(0.0f, sigma_t_override.z - med.sigma_s.z));
+    }
+
     med.compute_sigma_t();
-    med.enabled = (med.sigma_t > 0.0f);
+    med.enabled = spectrum_any_positive(med.sigma_t);
+}
+
+inline void parse_volume_density(const JsonValue& medObj, VolumeRegion& vol) {
+    const JsonValue* v = nullptr;
+    if (json_get(medObj, "density_file", &v) && v->type == JsonValue::Type::String)
+        vol.density_file = v->str;
+    if (json_get(medObj, "density_resolution", &v))
+        json_as_int3(*v, vol.density_nx, vol.density_ny, vol.density_nz);
+    if (json_get(medObj, "density_scale", &v) && v->type == JsonValue::Type::Number)
+        vol.density_scale = static_cast<float>(v->num);
+    if (json_get(medObj, "majorant", &v) && v->type == JsonValue::Type::Number)
+        vol.density_majorant = static_cast<float>(v->num);
+    if (json_get(medObj, "density_format", &v) && v->type == JsonValue::Type::String)
+        vol.density_format = parse_density_format_string(v->str);
+
+    if (!vol.density_file.empty() && vol.density_format == VOLUME_DENSITY_NONE)
+        vol.density_format = VOLUME_DENSITY_U8;
+
+    auto parse_scalar_grid = [&](const char* file_key,
+                                 const char* alt_file_key,
+                                 const char* resolution_key,
+                                 const char* alt_resolution_key,
+                                 const char* format_key,
+                                 const char* alt_format_key,
+                                 const char* scale_key,
+                                 const char* alt_scale_key,
+                                 std::string& out_file,
+                                 int& out_nx,
+                                 int& out_ny,
+                                 int& out_nz,
+                                 int& out_format,
+                                 float& out_scale) {
+        if (json_get(medObj, file_key, &v) && v->type == JsonValue::Type::String)
+            out_file = v->str;
+        else if (alt_file_key != nullptr && json_get(medObj, alt_file_key, &v) &&
+                 v->type == JsonValue::Type::String)
+            out_file = v->str;
+
+        if (json_get(medObj, resolution_key, &v))
+            json_as_int3(*v, out_nx, out_ny, out_nz);
+        else if (alt_resolution_key != nullptr && json_get(medObj, alt_resolution_key, &v))
+            json_as_int3(*v, out_nx, out_ny, out_nz);
+
+        if (json_get(medObj, scale_key, &v) && v->type == JsonValue::Type::Number)
+            out_scale = static_cast<float>(v->num);
+        else if (alt_scale_key != nullptr && json_get(medObj, alt_scale_key, &v) &&
+                 v->type == JsonValue::Type::Number)
+            out_scale = static_cast<float>(v->num);
+
+        if (json_get(medObj, format_key, &v) && v->type == JsonValue::Type::String)
+            out_format = parse_density_format_string(v->str);
+        else if (alt_format_key != nullptr && json_get(medObj, alt_format_key, &v) &&
+                 v->type == JsonValue::Type::String)
+            out_format = parse_density_format_string(v->str);
+
+        if (!out_file.empty() && out_format == VOLUME_DENSITY_NONE)
+            out_format = VOLUME_DENSITY_U8;
+    };
+
+    parse_scalar_grid("temperature_file", nullptr,
+                      "temperature_resolution", nullptr,
+                      "temperature_format", nullptr,
+                      "temperature_scale", nullptr,
+                      vol.temperature_file,
+                      vol.temperature_nx, vol.temperature_ny, vol.temperature_nz,
+                      vol.temperature_format, vol.temperature_scale);
+
+    parse_scalar_grid("flame_file", "flames_file",
+                      "flame_resolution", "flames_resolution",
+                      "flame_format", "flames_format",
+                      "flame_scale", "flames_scale",
+                      vol.flame_file,
+                      vol.flame_nx, vol.flame_ny, vol.flame_nz,
+                      vol.flame_format, vol.flame_scale);
+
+    // Emission parameters
+    if (json_get(medObj, "emission_scale", &v) && v->type == JsonValue::Type::Number)
+        vol.emission_scale = static_cast<float>(v->num);
+    if (json_get(medObj, "emission_temperature", &v) && v->type == JsonValue::Type::Array && v->arr.size() == 2) {
+        vol.emission_temp_min = static_cast<float>(v->arr[0].num);
+        vol.emission_temp_max = static_cast<float>(v->arr[1].num);
+    }
 }
 
 inline bool parse_scene(const JsonValue& root, Scene& scene, std::string* err) {
@@ -458,6 +644,7 @@ inline bool parse_scene(const JsonValue& root, Scene& scene, std::string* err) {
             vol.max_bounds = max_b;
             if (json_get(item, "medium", &medObj) && medObj->type == JsonValue::Type::Object) {
                 parse_medium(*medObj, vol.medium);
+                parse_volume_density(*medObj, vol);
             }
             scene.volumes.push_back(vol);
         } else if (!obj.path.empty() || obj.is_volume) {

@@ -120,7 +120,7 @@ HYBRID_FUNC inline Vec3 ShadeDirect(const Ray& r,
         Vec3 radiance = light.color * light.intensity;
 
         // Apply medium transmittance along shadow ray if applicable
-        float Tr = 1.0f;
+        Vec3 Tr = make_vec3(1.0f, 1.0f, 1.0f);
         if (objectMedia != nullptr && triObjectIds != nullptr &&
             rec.triangleIdx >= 0 && rec.triangleIdx < numTriangles) {
             int objId = triObjectIds[rec.triangleIdx];
@@ -130,7 +130,7 @@ HYBRID_FUNC inline Vec3 ShadeDirect(const Ray& r,
             }
         }
 
-        Vec3 direct = (radiance * f) * (NdotL * Tr);
+        Vec3 direct = (radiance * f) * Tr * NdotL;
         Lo = Lo + direct;
     }
     return Lo;

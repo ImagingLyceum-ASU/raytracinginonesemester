@@ -18,6 +18,17 @@ make -j8
 
 ![cornell_box.png](render_example/cornell_box.png)
 
+## Cornell Smoke EmberGen Result
+
+Rendered with the GPU build using `assets/json_files/cornell_smoke_embergen_47.json`.
+
+```bash
+cd build_gpu
+./render ../assets/json_files/cornell_smoke_embergen_47.json -o cornell_smoke_embergen_47_new.png
+```
+
+![cornell_smoke_embergen_47_new.png](build_gpu/cornell_smoke_embergen_47_new.png)
+
 ## OptiX AI Denoiser
 
 This project includes an optional OptiX denoising pass on the GPU path. You can enable it with:

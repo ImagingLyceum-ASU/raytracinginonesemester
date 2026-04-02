@@ -13,16 +13,252 @@
 
 struct Light;
 
+HYBRID_FUNC inline float power_heuristic(float pdf_a, float pdf_b) {
+    const float a2 = pdf_a * pdf_a;
+    const float b2 = pdf_b * pdf_b;
+    return (a2 + b2 > 0.0f) ? (a2 / (a2 + b2)) : 0.0f;
+}
+
+HYBRID_FUNC inline bool update_slab_interval(
+    float origin,
+    float direction,
+    float slab_min,
+    float slab_max,
+    float& t_enter,
+    float& t_exit)
+{
+    if (fabsf(direction) < 1e-8f) {
+        return origin >= slab_min && origin <= slab_max;
+    }
+
+    const float inv_dir = 1.0f / direction;
+    float t0 = (slab_min - origin) * inv_dir;
+    float t1 = (slab_max - origin) * inv_dir;
+    if (t0 > t1) {
+        const float tmp = t0;
+        t0 = t1;
+        t1 = tmp;
+    }
+
+    t_enter = fmaxf(t_enter, t0);
+    t_exit  = fminf(t_exit,  t1);
+    return t_enter <= t_exit;
+}
+
 // GPU-friendly volume region struct (mirrors VolumeRegion from scene.h)
 struct VolumeRegionGPU {
     Vec3 min_bounds;
     Vec3 max_bounds;
     HomogeneousMedium medium;
+    const float* density_data = nullptr;
+    int density_nx = 0;
+    int density_ny = 0;
+    int density_nz = 0;
+    float density_scale = 1.0f;
+    float density_majorant = -1.0f;
+
+    const float* temperature_data = nullptr;
+    int temperature_nx = 0;
+    int temperature_ny = 0;
+    int temperature_nz = 0;
+    float temperature_scale = 1.0f;
+
+    const float* flame_data = nullptr;
+    int flame_nx = 0;
+    int flame_ny = 0;
+    int flame_nz = 0;
+    float flame_scale = 1.0f;
+
+    // Emission (blackbody derived from temperature/flame channels)
+    float emission_scale = 0.0f;
+    float emission_temp_min = 500.0f;
+    float emission_temp_max = 2500.0f;
+
+    // Blackbody RGB approximation (Tanner Helland / CIE fit)
+    HYBRID_FUNC inline static Vec3 blackbody_rgb(float temp_K) {
+        const float t = temp_K / 100.0f;
+        float r, g, b;
+        if (t <= 66.0f) {
+            r = 1.0f;
+            g = (t > 1.0f) ? (0.390081579f * logf(t) - 0.631841443f) : 0.0f;
+            b = (t > 19.0f) ? (0.543206789f * logf(t - 10.0f) - 1.196254089f) : 0.0f;
+        } else {
+            r = 1.292936186f * powf(t - 60.0f, -0.1332047592f);
+            g = 1.129890861f * powf(t - 60.0f, -0.0755148492f);
+            b = 1.0f;
+        }
+        return make_vec3(
+            fminf(fmaxf(r, 0.0f), 1.0f),
+            fminf(fmaxf(g, 0.0f), 1.0f),
+            fminf(fmaxf(b, 0.0f), 1.0f));
+    }
+
+    HYBRID_FUNC inline static float saturate(float x) {
+        return fminf(fmaxf(x, 0.0f), 1.0f);
+    }
+
+    HYBRID_FUNC inline bool has_temperature_grid() const {
+        return temperature_data != nullptr &&
+               temperature_nx > 0 && temperature_ny > 0 && temperature_nz > 0;
+    }
+
+    HYBRID_FUNC inline bool has_flame_grid() const {
+        return flame_data != nullptr && flame_nx > 0 && flame_ny > 0 && flame_nz > 0;
+    }
+
+    HYBRID_FUNC inline float normalized_density(float scaled_density) const {
+        if (density_scale > 1e-8f) {
+            return saturate(scaled_density / density_scale);
+        }
+        return saturate(scaled_density);
+    }
+
+    HYBRID_FUNC inline float sample_scalar_grid(
+        const Vec3& p,
+        const float* grid_data,
+        int nx,
+        int ny,
+        int nz,
+        float grid_scale,
+        float fallback) const
+    {
+        if (grid_data == nullptr || nx <= 0 || ny <= 0 || nz <= 0) return fallback;
+
+        const float extent_x = max_bounds.x - min_bounds.x;
+        const float extent_y = max_bounds.y - min_bounds.y;
+        const float extent_z = max_bounds.z - min_bounds.z;
+        if (extent_x <= 1e-8f || extent_y <= 1e-8f || extent_z <= 1e-8f) return 0.0f;
+
+        const float u = fminf(fmaxf((p.x - min_bounds.x) / extent_x, 0.0f), 1.0f);
+        const float v = fminf(fmaxf((p.y - min_bounds.y) / extent_y, 0.0f), 1.0f);
+        const float w = fminf(fmaxf((p.z - min_bounds.z) / extent_z, 0.0f), 1.0f);
+
+        const float gx = u * float(nx - 1);
+        const float gy = v * float(ny - 1);
+        const float gz = w * float(nz - 1);
+
+        const int x0 = int(floorf(gx));
+        const int y0 = int(floorf(gy));
+        const int z0 = int(floorf(gz));
+        const int x1 = (x0 + 1 < nx) ? x0 + 1 : x0;
+        const int y1 = (y0 + 1 < ny) ? y0 + 1 : y0;
+        const int z1 = (z0 + 1 < nz) ? z0 + 1 : z0;
+
+        const float tx = gx - float(x0);
+        const float ty = gy - float(y0);
+        const float tz = gz - float(z0);
+
+        auto voxel = [&](int x, int y, int z) -> float {
+            const int idx = (z * ny + y) * nx + x;
+            return grid_data[idx];
+        };
+
+        const float c000 = voxel(x0, y0, z0);
+        const float c100 = voxel(x1, y0, z0);
+        const float c010 = voxel(x0, y1, z0);
+        const float c110 = voxel(x1, y1, z0);
+        const float c001 = voxel(x0, y0, z1);
+        const float c101 = voxel(x1, y0, z1);
+        const float c011 = voxel(x0, y1, z1);
+        const float c111 = voxel(x1, y1, z1);
+
+        const float c00 = c000 * (1.0f - tx) + c100 * tx;
+        const float c10 = c010 * (1.0f - tx) + c110 * tx;
+        const float c01 = c001 * (1.0f - tx) + c101 * tx;
+        const float c11 = c011 * (1.0f - tx) + c111 * tx;
+        const float c0 = c00 * (1.0f - ty) + c10 * ty;
+        const float c1 = c01 * (1.0f - ty) + c11 * ty;
+
+        return grid_scale * (c0 * (1.0f - tz) + c1 * tz);
+    }
+
+    // Sample emission radiance from temperature/flame channels, with a density fallback.
+    HYBRID_FUNC inline Vec3 sample_emission(
+        float scaled_density,
+        float scaled_temperature,
+        float scaled_flame) const
+    {
+        if (emission_scale <= 0.0f || scaled_density <= 0.0f) return make_vec3(0.0f, 0.0f, 0.0f);
+
+        const float temp_norm = saturate(scaled_temperature);
+        const float flame_norm = saturate(scaled_flame);
+        if (flame_norm <= 0.0f) return make_vec3(0.0f, 0.0f, 0.0f);
+
+        const float temp = emission_temp_min + temp_norm * (emission_temp_max - emission_temp_min);
+        const Vec3 color = blackbody_rgb(temp);
+        const float rel = temp / fmaxf(emission_temp_max, 1.0f);
+        const float intensity = emission_scale * flame_norm * rel * rel * rel * rel;
+        return color * intensity;
+    }
 
     HYBRID_FUNC inline bool contains(const Vec3& p) const {
         return p.x >= min_bounds.x && p.x <= max_bounds.x &&
                p.y >= min_bounds.y && p.y <= max_bounds.y &&
                p.z >= min_bounds.z && p.z <= max_bounds.z;
+    }
+
+    HYBRID_FUNC inline bool has_density_grid() const {
+        return density_data != nullptr && density_nx > 0 && density_ny > 0 && density_nz > 0;
+    }
+
+    HYBRID_FUNC inline bool ray_interval(const Ray& ray, float& t_enter, float& t_exit) const {
+        t_enter = 0.0f;
+        t_exit = 1e30f;
+        return update_slab_interval(ray.orig.x, ray.dir.x, min_bounds.x, max_bounds.x, t_enter, t_exit) &&
+               update_slab_interval(ray.orig.y, ray.dir.y, min_bounds.y, max_bounds.y, t_enter, t_exit) &&
+               update_slab_interval(ray.orig.z, ray.dir.z, min_bounds.z, max_bounds.z, t_enter, t_exit) &&
+               t_exit >= 0.0f;
+    }
+
+    HYBRID_FUNC inline float segment_length(const Ray& ray, float max_distance) const {
+        float t_enter, t_exit;
+        if (!ray_interval(ray, t_enter, t_exit)) return 0.0f;
+        const float seg_start = fmaxf(0.0f, t_enter);
+        const float seg_end = fminf(max_distance, t_exit);
+        return (seg_end > seg_start) ? (seg_end - seg_start) : 0.0f;
+    }
+
+    HYBRID_FUNC inline float sample_density(const Vec3& p) const {
+        return sample_scalar_grid(
+            p, density_data, density_nx, density_ny, density_nz, density_scale, 1.0f);
+    }
+
+    HYBRID_FUNC inline float sample_temperature(const Vec3& p, float scaled_density) const {
+        const float fallback = normalized_density(scaled_density);
+        if (!has_temperature_grid() && has_flame_grid()) {
+            return sample_scalar_grid(
+                p, flame_data, flame_nx, flame_ny, flame_nz, flame_scale, fallback);
+        }
+        return sample_scalar_grid(
+            p,
+            temperature_data,
+            temperature_nx,
+            temperature_ny,
+            temperature_nz,
+            temperature_scale,
+            fallback);
+    }
+
+    HYBRID_FUNC inline float sample_flame(const Vec3& p, float scaled_density) const {
+        const float fallback = normalized_density(scaled_density);
+        if (!has_flame_grid() && has_temperature_grid()) {
+            return sample_scalar_grid(
+                p,
+                temperature_data,
+                temperature_nx,
+                temperature_ny,
+                temperature_nz,
+                temperature_scale,
+                fallback);
+        }
+        return sample_scalar_grid(
+            p,
+            flame_data,
+            flame_nx,
+            flame_ny,
+            flame_nz,
+            flame_scale,
+            fallback);
     }
 };
 
@@ -282,22 +518,159 @@ HYBRID_FUNC inline HomogeneousMedium findVolumeAtPoint(
     return none;
 }
 
+HYBRID_FUNC inline int findVolumeIndexAtPoint(
+    const Vec3& p,
+    const VolumeRegionGPU* __restrict__ volumeRegions,
+    int numVolumeRegions)
+{
+    if (volumeRegions != nullptr) {
+        for (int i = 0; i < numVolumeRegions; ++i) {
+            if (volumeRegions[i].contains(p))
+                return i;
+        }
+    }
+    return -1;
+}
+
+HYBRID_FUNC inline int findNextVolumeAlongRay(
+    const Ray& ray,
+    const VolumeRegionGPU* __restrict__ volumeRegions,
+    int numVolumeRegions,
+    float& out_t_enter,
+    float& out_t_exit)
+{
+    int best_idx = -1;
+    float best_enter = 1e30f;
+    float best_exit = 1e30f;
+
+    if (volumeRegions != nullptr) {
+        for (int i = 0; i < numVolumeRegions; ++i) {
+            float t_enter = 0.0f;
+            float t_exit = 0.0f;
+            if (!volumeRegions[i].ray_interval(ray, t_enter, t_exit)) continue;
+            if (t_exit <= RT_EPS) continue;
+
+            const float enter = fmaxf(t_enter, 0.0f);
+            if (enter < best_enter) {
+                best_enter = enter;
+                best_exit = t_exit;
+                best_idx = i;
+            }
+        }
+    }
+
+    out_t_enter = best_enter;
+    out_t_exit = best_exit;
+    return best_idx;
+}
+
+HYBRID_FUNC inline Vec3 estimateTransmittance(
+    const Ray& ray,
+    float tmax,
+    const VolumeRegionGPU* volumeRegion,
+    const HomogeneousMedium& medium,
+    unsigned int& rng_state)
+{
+    if (tmax <= 0.0f || !medium.has_extinction()) {
+        return make_vec3(1.0f, 1.0f, 1.0f);
+    }
+    if (volumeRegion == nullptr || !volumeRegion->has_density_grid()) {
+        return medium.transmittance(tmax);
+    }
+
+    const float sigma_maj = volumeRegion->density_majorant;
+    if (sigma_maj <= 1e-8f) {
+        return make_vec3(1.0f, 1.0f, 1.0f);
+    }
+
+    Vec3 Tr = make_vec3(1.0f, 1.0f, 1.0f);
+    float t = 0.0f;
+    while (true) {
+        const float xi = rng_next(rng_state);
+        t += -logf(fmaxf(1.0f - xi, 1e-8f)) / sigma_maj;
+        if (t >= tmax) break;
+
+        const float density = volumeRegion->sample_density(ray.at(t));
+        const Vec3 sigma_t_local = medium.sigma_t * density;
+        Tr = Tr * make_vec3(
+            fmaxf(0.0f, 1.0f - sigma_t_local.x / sigma_maj),
+            fmaxf(0.0f, 1.0f - sigma_t_local.y / sigma_maj),
+            fmaxf(0.0f, 1.0f - sigma_t_local.z / sigma_maj));
+    }
+    return Tr;
+}
+
+HYBRID_FUNC inline bool sampleHeterogeneousScatter(
+    const Ray& ray,
+    float tmax,
+    const VolumeRegionGPU& volumeRegion,
+    const HomogeneousMedium& medium,
+    int channel,
+    unsigned int& rng_state,
+    float& t_scatter,
+    Vec3* out_emission = nullptr)
+{
+    const float sigma_maj = volumeRegion.density_majorant;
+    if (tmax <= 0.0f || sigma_maj <= 1e-8f) return false;
+
+    const float inv_sigma_maj = 1.0f / sigma_maj;
+    const bool accumulate_Le = (out_emission != nullptr && volumeRegion.emission_scale > 0.0f);
+    Vec3 Tr_run = make_vec3(1.0f, 1.0f, 1.0f);
+    Vec3 Le_acc = make_vec3(0.0f, 0.0f, 0.0f);
+
+    float t = 0.0f;
+    while (true) {
+        const float xi = rng_next(rng_state);
+        t += -logf(fmaxf(1.0f - xi, 1e-8f)) * inv_sigma_maj;
+        if (t >= tmax) {
+            if (out_emission) *out_emission = Le_acc;
+            return false;
+        }
+
+        const Vec3 pos = ray.at(t);
+        const float density = volumeRegion.sample_density(pos);
+        const Vec3 sigma_t_local = medium.sigma_t * density;
+
+        // Accumulate volumetric emission using the tracked null-collision points.
+        if (accumulate_Le && density > 0.0f) {
+            const float temperature = volumeRegion.sample_temperature(pos, density);
+            const float flame = volumeRegion.sample_flame(pos, density);
+            const Vec3 Le = volumeRegion.sample_emission(density, temperature, flame);
+            Le_acc = Le_acc + Tr_run * (Le * inv_sigma_maj);
+        }
+
+        // Update running transmittance via ratio tracking
+        Tr_run = Tr_run * make_vec3(
+            fmaxf(0.0f, 1.0f - sigma_t_local.x * inv_sigma_maj),
+            fmaxf(0.0f, 1.0f - sigma_t_local.y * inv_sigma_maj),
+            fmaxf(0.0f, 1.0f - sigma_t_local.z * inv_sigma_maj));
+
+        const float accept = fminf(1.0f, fmaxf(0.0f, spectrum_channel(sigma_t_local, channel) * inv_sigma_maj));
+        if (rng_next(rng_state) < accept) {
+            t_scatter = t;
+            if (out_emission) *out_emission = Le_acc;
+            return true;
+        }
+    }
+}
+
 // -----------------------------------------------------------------------
 // TraceRayIterative
 //
-// Volume path tracing from Lecture 14 (EEE 598):
+// Volume path tracing with per-channel homogeneous media:
 //
 //   Per bounce:
 //     1. Check if current ray origin is inside a volume region.
 //     2. If inside:
-//          sample free path t = -ln(1-xi)/sigma_t          [slide 55]
+//          sample a free path in one RGB extinction channel
 //          if t < t_surface: VOLUME SCATTER
-//            throughput *= sigma_s/sigma_t  (albedo)        [slide 59]
-//            sample new dir from HG phase function          [slide 53]
+//            throughput *= Tr * sigma_s / pdf_t
+//            sample new dir from HG phase function
 //            continue to next depth
+//          else if exiting the AABB volume first:
+//            apply Tr / pdf_t up to the boundary and keep marching
 //          else: SURFACE HIT
-//            apply transmittance Tr(t_surf)/P(z) = 1        [slide 59]
-//            proceed with normal surface shading
+//            apply Tr / pdf_t up to the surface and proceed with shading
 //     3. If not inside a volume: normal surface shading only.
 // -----------------------------------------------------------------------
 HYBRID_FUNC inline Vec3 TraceRayIterative(
@@ -335,6 +708,8 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
     float prev_pdf   = 0.0f;
     bool  prev_delta = false;
     Vec3  prev_N     = make_vec3(0.0f, 0.0f, 0.0f);
+    bool  prev_medium_event = false;
+    Vec3  prev_scatter_pos  = make_vec3(0.0f, 0.0f, 0.0f);
 
     for (int depth = 0; depth < maxDepth; ++depth) {
 
@@ -342,8 +717,35 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
         // 1. Determine if the current ray origin is inside a volume region.
         //    We re-check every bounce because the ray may have scattered out.
         // ----------------------------------------------------------------
+        const int activeVolumeIdx =
+            findVolumeIndexAtPoint(ray.origin(), volumeRegions, numVolumeRegions);
         HomogeneousMedium activeMedium =
             findVolumeAtPoint(ray.origin(), volumeRegions, numVolumeRegions);
+        const VolumeRegionGPU* activeVolume =
+            (activeVolumeIdx >= 0 && volumeRegions != nullptr) ? &volumeRegions[activeVolumeIdx] : nullptr;
+        float t_volume_exit = 1e30f;
+        if (activeVolumeIdx >= 0) {
+            float t_enter = 0.0f;
+            if (!activeVolume->ray_interval(ray, t_enter, t_volume_exit)) {
+                activeMedium.enabled = false;
+                t_volume_exit = 1e30f;
+            }
+        } else {
+            float t_volume_enter = 1e30f;
+            float t_next_volume_exit = 1e30f;
+            const int nextVolumeIdx = findNextVolumeAlongRay(
+                ray, volumeRegions, numVolumeRegions, t_volume_enter, t_next_volume_exit);
+            if (nextVolumeIdx >= 0) {
+                HitRecord preHit;
+                SearchBVH(numTriangles, ray, nodes, aabbs, triangles, preHit);
+                const float t_surf_pre = preHit.hit ? preHit.t : 1e30f;
+                if (t_volume_enter + RT_EPS < t_surf_pre) {
+                    ray = Ray(ray.at(t_volume_enter + RT_EPS), ray.direction());
+                    --depth;
+                    continue;
+                }
+            }
+        }
 
         // ----------------------------------------------------------------
         // 2. BVH traversal to find the nearest surface hit
@@ -356,106 +758,141 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
         // ----------------------------------------------------------------
         // 3. Volume scatter decision  [Lecture 14, slides 54-59]
         // ----------------------------------------------------------------
-        if (activeMedium.enabled && activeMedium.sigma_t > 0.0f) {
+        if (activeMedium.has_extinction()) {
+            const float t_medium_limit = fminf(t_surf, t_volume_exit);
 
-            // Sample free-path distance:  t = -ln(1-xi) / sigma_t  [slide 55]
-            const float xi_t  = rng_next(rng_state);
-            const float t_vol = activeMedium.sampleFreePath(xi_t);
+            if (t_medium_limit > RT_EPS) {
+                const int channel = (int)fminf(2.0f, floorf(rng_next(rng_state) * 3.0f));
+                float t_vol = 0.0f;
+                bool sampled_scatter = false;
 
-            if (t_vol < t_surf) {
-                // ---- VOLUME SCATTER EVENT [slide 59, if t < tmax] ----
-                //
-                // The full weight before simplification is:
-                //   Tr(t) / p(t)  *  sigma_s  *  f_p(omega, omega_i) / p(omega_i)
-                //
-                // With HG sampled proportional to f_p:   f_p / p(omega_i) = 1
-                // And Tr(t)/p(t) = exp(-sigma_t*t) / (sigma_t*exp(-sigma_t*t)) = 1/sigma_t
-                // So the full factor reduces to:  sigma_s / sigma_t  (the albedo)
-                throughput = throughput * activeMedium.albedo();
+                Vec3 vol_emission = make_vec3(0.0f, 0.0f, 0.0f);
+                if (activeVolume != nullptr && activeVolume->has_density_grid()) {
+                    sampled_scatter = sampleHeterogeneousScatter(
+                        ray, t_medium_limit, *activeVolume, activeMedium, channel, rng_state, t_vol, &vol_emission);
+                } else {
+                    const float xi_t  = rng_next(rng_state);
+                    t_vol = activeMedium.sampleFreePath(xi_t, channel);
+                    sampled_scatter = (t_vol < t_medium_limit);
+                }
 
-                // Move ray origin to the scatter point
-                const Vec3 scatter_pos = ray.origin() + ray.direction() * t_vol;
+                // Add volume emission accumulated during delta tracking
+                if (vol_emission.x > 0.0f || vol_emission.y > 0.0f || vol_emission.z > 0.0f) {
+                    radiance = radiance + throughput * vol_emission;
+                }
 
-                // ---- VOLUME NEE: direct illumination at scatter point ----
-                //
-                // At scatter point x, the in-scattered direct contribution is:
-                //   L_direct = throughput * p_HG(wo, wi_l) * Tr(x->light) * Le / pdf_area
-                //
-                // throughput already carries sigma_s/sigma_t from the albedo above, so
-                // we only need the phase function value and transmittance explicitly.
-                if (numEmissiveTris > 0) {
-                    const float u_sel = rng_next(rng_state);
-                    const int eidx = binary_search_cdf(emissiveCDF, numEmissiveTris, u_sel);
-                    const EmissiveTriInfo& emi = emissiveTris[eidx];
-                    const Triangle& eTri = triangles[emi.triangleIdx];
+                if (sampled_scatter) {
+                    const Vec3 scatter_pos = ray.origin() + ray.direction() * t_vol;
+                    Vec3 Tr = make_vec3(1.0f, 1.0f, 1.0f);
+                    Vec3 sigma_s_event = activeMedium.sigma_s;
+                    Vec3 sigma_t_event = activeMedium.sigma_t;
 
-                    float u1 = rng_next(rng_state), u2 = rng_next(rng_state);
-                    if (u1 + u2 > 1.0f) { u1 = 1.0f - u1; u2 = 1.0f - u2; }
-                    const Vec3 lightPoint = eTri.v0*(1.0f-u1-u2) + eTri.v1*u1 + eTri.v2*u2;
+                    if (activeVolume != nullptr && activeVolume->has_density_grid()) {
+                        Tr = estimateTransmittance(ray, t_vol, activeVolume, activeMedium, rng_state);
+                        const float density = activeVolume->sample_density(scatter_pos);
+                        sigma_s_event = activeMedium.sigma_s * density;
+                        sigma_t_event = activeMedium.sigma_t * density;
+                    } else {
+                        Tr = activeMedium.transmittance(t_vol);
+                    }
 
-                    Vec3 toLight = lightPoint - scatter_pos;
-                    const float r2 = dot(toLight, toLight);
-                    if (r2 > 1e-8f) {
-                        const float r_dist  = sqrtf(r2);
-                        const Vec3 wi_light = toLight * (1.0f / r_dist);
-                        const float cosLight = fabsf(dot(emi.normal, -wi_light));
+                    const float Tr_avg = fmaxf(spectrum_average(Tr), 1e-8f);
+                    const float sigma_t_avg = fmaxf(spectrum_average(sigma_t_event), 1e-8f);
+                    throughput = throughput * (Tr * (1.0f / Tr_avg)) *
+                                 (sigma_s_event * (1.0f / sigma_t_avg));
 
-                        if (cosLight > 1e-6f) {
-                            Ray shadowRay(scatter_pos + wi_light * RT_EPS, wi_light);
-                            HitRecord shadowHit{}; shadowHit.hit = false;
-                            SearchBVH(numTriangles, shadowRay, nodes, aabbs, triangles, shadowHit);
+                    // ---- VOLUME NEE: direct illumination at scatter point ----
+                    if (numEmissiveTris > 0 && nee_mode != 1) {
+                        const float u_sel = rng_next(rng_state);
+                        const int eidx = binary_search_cdf(emissiveCDF, numEmissiveTris, u_sel);
+                        const EmissiveTriInfo& emi = emissiveTris[eidx];
+                        const Triangle& eTri = triangles[emi.triangleIdx];
 
-                            if (!shadowHit.hit || shadowHit.t >= r_dist - RT_EPS) {
-                                // Phase function for wo -> wi_light direction
-                                const Vec3 wo_vol = make_vec3(-ray.direction().x,
-                                                               -ray.direction().y,
-                                                               -ray.direction().z);
-                                const float cos_theta_l = dot(normalize(wo_vol), wi_light);
-                                const float phase_l = activeMedium.phaseHG(cos_theta_l);
+                        float u1 = rng_next(rng_state), u2 = rng_next(rng_state);
+                        if (u1 + u2 > 1.0f) { u1 = 1.0f - u1; u2 = 1.0f - u2; }
+                        const Vec3 lightPoint = eTri.v0*(1.0f-u1-u2) + eTri.v1*u1 + eTri.v2*u2;
 
-                                // Area PDF converted to solid angle
-                                const float G = cosLight / r2;
-                                const float pdf_area_sa = (G > 1e-10f)
-                                    ? (1.0f / totalEmissiveArea) / G : 0.0f;
+                        Vec3 toLight = lightPoint - scatter_pos;
+                        const float r2 = dot(toLight, toLight);
+                        if (r2 > 1e-8f) {
+                            const float r_dist  = sqrtf(r2);
+                            const Vec3 wi_light = toLight * (1.0f / r_dist);
+                            const float cosLight = fabsf(dot(emi.normal, -wi_light));
 
-                                // Transmittance along shadow ray through the medium
-                                const float Tr_light = activeMedium.transmittance(r_dist);
+                            if (cosLight > 1e-6f) {
+                                Ray shadowRay(scatter_pos + wi_light * RT_EPS, wi_light);
+                                HitRecord shadowHit{}; shadowHit.hit = false;
+                                SearchBVH(numTriangles, shadowRay, nodes, aabbs, triangles, shadowHit);
 
-                                if (pdf_area_sa > 1e-10f) {
-                                    radiance = radiance + throughput *
-                                               (emi.emission * phase_l * Tr_light / pdf_area_sa);
+                                if (!shadowHit.hit || shadowHit.t >= r_dist - RT_EPS) {
+                                    const Vec3 wo_vol = make_vec3(-ray.direction().x,
+                                                                   -ray.direction().y,
+                                                                   -ray.direction().z);
+                                    const float cos_theta_l = dot(normalize(wo_vol), wi_light);
+                                    const float phase_l = activeMedium.phaseHG(cos_theta_l);
+
+                                    const float G = cosLight / r2;
+                                    const float pdf_area_sa = (G > 1e-10f)
+                                        ? (1.0f / totalEmissiveArea) / G : 0.0f;
+                                    const float light_medium_dist = (activeVolume != nullptr)
+                                        ? activeVolume->segment_length(shadowRay, r_dist)
+                                        : 0.0f;
+                                    const Vec3 Tr_light = (activeVolume != nullptr && activeVolume->has_density_grid())
+                                        ? estimateTransmittance(shadowRay, light_medium_dist, activeVolume, activeMedium, rng_state)
+                                        : activeMedium.transmittance(light_medium_dist);
+                                    const float w_light =
+                                        (nee_mode == 0) ? 1.0f : power_heuristic(pdf_area_sa, phase_l);
+
+                                    if (pdf_area_sa > 1e-10f) {
+                                        radiance = radiance + throughput *
+                                                   (emi.emission * phase_l * Tr_light * (w_light / pdf_area_sa));
+                                    }
                                 }
                             }
                         }
                     }
+                    // ---- END VOLUME NEE ----
+
+                    const float xi1 = rng_next(rng_state);
+                    const float xi2 = rng_next(rng_state);
+                    const Vec3 wi_in = make_vec3(-ray.direction().x,
+                                                 -ray.direction().y,
+                                                 -ray.direction().z);
+                    const Vec3 new_dir = activeMedium.samplePhaseHG(wi_in, xi1, xi2);
+
+                    ray = Ray(scatter_pos, new_dir);
+                    prev_pdf   = activeMedium.phaseHG(dot(normalize(wi_in), normalize(new_dir)));
+                    prev_delta = false;
+                    prev_medium_event = true;
+                    prev_scatter_pos = scatter_pos;
+
+                    const float p_survive = fminf(luminance(throughput), 0.95f);
+                    if (p_survive < 1e-4f || rng_next(rng_state) > p_survive) break;
+                    throughput = throughput * (1.0f / p_survive);
+
+                    continue;
                 }
-                // ---- END VOLUME NEE ----
 
-                // Sample scattered direction from HG phase function [slide 53]
-                // Convention: pass the incoming direction (pointing back toward camera)
-                const float xi1 = rng_next(rng_state);
-                const float xi2 = rng_next(rng_state);
-                const Vec3 wi_in = make_vec3(-ray.direction().x,
-                                             -ray.direction().y,
-                                             -ray.direction().z);
-                const Vec3 new_dir = activeMedium.samplePhaseHG(wi_in, xi1, xi2);
-
-                ray = Ray(scatter_pos, new_dir);
-                prev_pdf   = activeMedium.phaseHG(dot(normalize(wi_in), normalize(new_dir)));
-                prev_delta = false;
-
-                // Russian roulette
-                const float p_survive = fminf(luminance(throughput), 0.95f);
-                if (p_survive < 1e-4f || rng_next(rng_state) > p_survive) break;
-                throughput = throughput * (1.0f / p_survive);
-
-                continue;  // next depth iteration — no surface shading
+                Vec3 Tr = make_vec3(1.0f, 1.0f, 1.0f);
+                if (activeVolume != nullptr && activeVolume->has_density_grid()) {
+                    Tr = estimateTransmittance(ray, t_medium_limit, activeVolume, activeMedium, rng_state);
+                    const float pdf_t = fmaxf(spectrum_average(Tr), 1e-8f);
+                    if (pdf_t <= 1e-10f) break;
+                    throughput = throughput * (Tr * (1.0f / pdf_t));
+                } else {
+                    Tr = activeMedium.transmittance(t_medium_limit);
+                    const float pdf_t = spectrum_average(Tr);
+                    if (pdf_t <= 1e-10f) break;
+                    throughput = throughput * (Tr * (1.0f / pdf_t));
+                }
             }
 
-            // ---- SURFACE HIT THROUGH MEDIUM [slide 59, else branch] ----
-            // Tr(t_surf) / P(z) cancels to 1 for a homogeneous medium
-            // (both equal exp(-sigma_t * t_surf)), so throughput is unchanged.
-            // We fall through to the normal surface shading code below.
+            if (t_volume_exit + RT_EPS < t_surf) {
+                const float advance = fmaxf(t_volume_exit, 0.0f) + RT_EPS;
+                ray = Ray(ray.at(advance), ray.direction());
+                --depth;
+                continue;
+            }
         }
 
         // ----------------------------------------------------------------
@@ -477,6 +914,25 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
         if (Le.x > 0.0f || Le.y > 0.0f || Le.z > 0.0f) {
             if (depth == 0 || prev_delta) {
                 radiance = radiance + throughput * Le;
+            } else if (prev_medium_event) {
+                if (nee_mode == 1) {
+                    radiance = radiance + throughput * Le;
+                } else if (nee_mode == 2 && numEmissiveTris > 0 && prev_pdf > 1e-6f) {
+                    Vec3 hitGeomN = normalize(cross(
+                        triangles[hitRecord.triangleIdx].v1 - triangles[hitRecord.triangleIdx].v0,
+                        triangles[hitRecord.triangleIdx].v2 - triangles[hitRecord.triangleIdx].v0));
+                    const Vec3 to_light = hitRecord.p - prev_scatter_pos;
+                    const float dist2 = dot(to_light, to_light);
+                    if (dist2 > 1e-10f) {
+                        const Vec3 wi_prev = to_light * (1.0f / sqrtf(dist2));
+                        const float cosLight = fabsf(dot(hitGeomN, -wi_prev));
+                        const float G = cosLight / dist2;
+                        const float pdf_area_sa =
+                            (G > 1e-10f) ? (1.0f / totalEmissiveArea) / G : 0.0f;
+                        const float w_phase = power_heuristic(prev_pdf, pdf_area_sa);
+                        radiance = radiance + throughput * Le * w_phase;
+                    }
+                }
             } else if (nee_mode == 1) {
                 radiance = radiance + throughput * Le;
             } else if (nee_mode == 2 && numEmissiveTris > 0 && prev_pdf > 1e-6f) {
@@ -592,14 +1048,19 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
                 const Vec3  f_nee       = EvaluateBRDF(hitRecord, Vo, wi_nee);
 
                 // Apply medium transmittance along NEE shadow ray if in volume
-                float Tr_nee = 1.0f;
-                if (activeMedium.enabled)
-                    Tr_nee = activeMedium.transmittance(dist_nee);
+                Vec3 Tr_nee = make_vec3(1.0f, 1.0f, 1.0f);
+                if (activeMedium.has_extinction() && activeVolume != nullptr) {
+                    Ray mediumShadowRay(hitRecord.p + N * RT_EPS, wi_nee);
+                    const float medium_dist = activeVolume->segment_length(mediumShadowRay, dist_nee);
+                    Tr_nee = activeVolume->has_density_grid()
+                        ? estimateTransmittance(mediumShadowRay, medium_dist, activeVolume, activeMedium, rng_state)
+                        : activeMedium.transmittance(medium_dist);
+                }
 
                 if (nee_mode == 0) {
                     if (pdf_area_sa > 1e-10f) {
                         radiance = radiance + throughput *
-                                   (Le_nee * f_nee * (NdotL_nee * Tr_nee / pdf_area_sa));
+                                   (Le_nee * f_nee * (NdotL_nee / pdf_area_sa) * Tr_nee);
                     }
                 } else {
                     const float pdf_cos      = NdotL_nee * 0.31830988618f;
@@ -611,7 +1072,7 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
                         const float w_nee   = (p2_nee + p2_brdf > 0.0f)
                                             ? p2_nee / (p2_nee + p2_brdf) : 0.0f;
                         radiance = radiance + throughput *
-                                   (Le_nee * f_nee * (NdotL_nee * Tr_nee / pdf_combined) * w_nee);
+                                   (Le_nee * f_nee * (NdotL_nee / pdf_combined) * Tr_nee * w_nee);
                     }
                 }
             }
@@ -636,6 +1097,7 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
             throughput = throughput * (f * (NdotWi / pdf));
             prev_pdf   = pdf;
             prev_delta = false;
+            prev_medium_event = false;
         } else if (ior > 1.0f) {
             // ---- Dielectric glass (Snell's law + Schlick Fresnel) ----
             //
@@ -667,6 +1129,7 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
             throughput = throughput * hitRecord.mat.specularColor;
             prev_pdf   = 0.0f;
             prev_delta = true;
+            prev_medium_event = false;
         } else {
             // ---- Perfect mirror ----
             const Vec3 reflDir = reflect_dir(unit_vector(ray.direction()), N);
@@ -674,6 +1137,7 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
             throughput = throughput * (hitRecord.mat.specularColor * kr);
             prev_pdf   = 0.0f;
             prev_delta = true;
+            prev_medium_event = false;
         }
 
         // Russian roulette
