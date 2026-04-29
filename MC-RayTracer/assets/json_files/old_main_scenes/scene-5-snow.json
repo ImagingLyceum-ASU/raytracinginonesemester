@@ -7,7 +7,7 @@
     },
 
     "miss_color": [0.50, 0.72, 0.98],
-    "sky_hdri": "./assets/meshes/sky.hdr",
+    "sky_hdri": "./assets/meshes/snow.hdr",
     "camera": {
         "focal_length_mm": 70.0,
         "sensor_height_mm": 24.0,

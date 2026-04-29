@@ -7,7 +7,7 @@
     },
 
     "miss_color": [0.50, 0.72, 0.98],
-    "sky_hdri": "./assets/meshes/sky.hdr",
+    "sky_hdri": "./assets/meshes/snow.hdr",
     "camera": {
         "focal_length_mm": 55.0,
         "sensor_height_mm": 24.0,
@@ -9055,7 +9055,7 @@
         {
             "name": "snow",
             "type": "mesh",
-            "path": "./assets/meshes/snow.obj",
+            "path": "./assets/meshes/extra_snow.obj",
             "use_mtl": true,
             "transform": {
                 "position": [0.0, 0.0, 0.0],
@@ -9084,26 +9084,6 @@
                 "kd": 1.0,
                 "ks": 0.1,
                 "kr": 0.0
-            }
-        },
-        {
-            "name": "grass_blades",
-            "type": "mesh",
-            "path": "./assets/meshes/old_main_grass.obj",
-            "use_mtl": false,
-            "transform": {
-                "position": [0.0, 0.0, 0.0],
-                "rotation": [90.0, 0.0, 0.0],
-                "scale":    [1.0, 1.0, 1.0]
-            },
-            "material": {
-                "albedo": [0.22, 0.52, 0.14],
-                "kd": 1.0,
-                "ks": 0.05,
-                "specular_color": [0.28, 0.50, 0.18],
-                "shininess": 16.0,
-                "kr": 0.0,
-                "diffuse_texture": "./assets/grass/grass_strands.jpg"
             }
         }
     ]
