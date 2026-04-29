@@ -1,0 +1,103 @@
+{
+    "settings": {
+        "max_bounces": 5,
+        "spp": 32,
+        "diffuse_bounce": true,
+        "keyframes": 1
+    },
+
+    "miss_color": [0.50, 0.72, 0.98],
+    "sky_hdri": "./assets/meshes/sky.hdr",
+    "camera": {
+        "focal_length_mm": 70.0,
+        "sensor_height_mm": 24.0,
+        "pixel_width": 1920,
+        "pixel_height": 1080,
+        "up": [
+            0.0,
+            0.0,
+            1.0
+        ],
+        "positions": [
+            [
+                11.000107,
+                0,
+                20.999992
+            ]
+        ],
+        "look_ats": [
+            [
+                10.278844,
+                0,
+                20.307423
+            ]
+        ]
+    },
+    "lights": [
+        {
+            "light_type": "directional",
+            "direction":  [1.00, 0.30, 1.20],
+            "color":      [1.00, 0.95, 0.88],
+            "intensity":  10
+        }
+    ],
+
+    "scene": [
+        {
+            "name": "ground",
+            "type": "mesh",
+            "path": "./assets/meshes/plane_5x5_uv.obj",
+            "use_mtl": false,
+            "transform": {
+                "position": [-3.0, -2.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale":    [6.8, 6.0, 1.0]
+            },
+            "material": {
+                "albedo": [0.28, 0.52, 0.18],
+                "kd": 1.0,
+                "ks": 0.0,
+                "kr": 0.0,
+                "diffuse_texture": "./assets/grass/ground.png",
+                "uv_scale": 20.0
+            }
+        },
+        {
+            "name": "old_main_scene",
+            "type": "mesh",
+            "path": "./assets/meshes/old_main.obj",
+            "use_mtl": true,
+            "transform": {
+                "position": [0.0, 0.0, 0.0],
+                "rotation": [90.0, 0.0, 0.0],
+                "scale":    [1.0, 1.0, 1.0]
+            },
+            "material": {
+                "albedo": [0.75, 0.68, 0.58],
+                "kd": 1.0,
+                "ks": 0.1,
+                "kr": 0.0
+            }
+        },
+        {
+            "name": "grass_blades",
+            "type": "mesh",
+            "path": "./assets/meshes/old_main_grass.obj",
+            "use_mtl": false,
+            "transform": {
+                "position": [0.0, 0.0, 0.0],
+                "rotation": [90.0, 0.0, 0.0],
+                "scale":    [1.0, 1.0, 1.0]
+            },
+            "material": {
+                "albedo": [0.22, 0.52, 0.14],
+                "kd": 1.0,
+                "ks": 0.05,
+                "specular_color": [0.28, 0.50, 0.18],
+                "shininess": 16.0,
+                "kr": 0.0,
+                "diffuse_texture": "./assets/grass/grass_strands.jpg"
+            }
+        }
+    ]
+}
