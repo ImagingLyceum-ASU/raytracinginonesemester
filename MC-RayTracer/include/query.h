@@ -919,7 +919,13 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
             Vec3 sky = (hdri && hdri->width > 0)
                        ? sampleHDRI(*hdri, ray.direction())
                        : missColor;
-            radiance = radiance + throughput * sky;
+            float w = 1.0f;
+            if (hdri && hdri->hasImportanceSampling() && nee_mode == 2 &&
+                depth > 0 && !prev_delta && prev_pdf > 1e-6f) {
+                float pdf_hdri = hdri->pdfDirection(ray.direction());
+                w = power_heuristic(prev_pdf, pdf_hdri);
+            }
+            radiance = radiance + throughput * sky * w;
             break;
         }
 
@@ -1102,6 +1108,39 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
                                             ? p2_nee / (p2_nee + p2_brdf) : 0.0f;
                         radiance = radiance + throughput *
                                    (Le_nee * f_nee * (NdotL_nee / pdf_combined) * Tr_nee * w_nee);
+                    }
+                }
+            }
+        }
+
+        // ----------------------------------------------------------------
+        // 7b. HDRI NEE — importance-sample the sky as a direct light
+        // ----------------------------------------------------------------
+        if (hdri && hdri->hasImportanceSampling() && nee_mode != 1) {
+            float xi1 = rng_next(rng_state), xi2 = rng_next(rng_state);
+            float pdf_hdri;
+            Vec3 wi_hdri = hdri->sampleDirection(xi1, xi2, pdf_hdri);
+            float NdotL_hdri = fmaxf(dot(N, wi_hdri), 0.0f);
+            if (NdotL_hdri > 0.0f && pdf_hdri > 1e-6f) {
+                Ray shadowRay_hdri(hitRecord.p + N * RT_EPS, wi_hdri);
+                HitRecord shadowHit_hdri; shadowHit_hdri.hit = false;
+                SearchBVH(numTriangles, shadowRay_hdri, nodes, aabbs, triangles, shadowHit_hdri);
+                if (!shadowHit_hdri.hit) {
+                    Vec3 Le_hdri = sampleHDRI(*hdri, wi_hdri);
+                    Vec3 f_hdri  = EvaluateBRDF(hitRecord, Vo, wi_hdri);
+                    Vec3 Tr_hdri = make_vec3(1.0f, 1.0f, 1.0f);
+                    if (activeMedium.has_extinction() && activeVolume != nullptr) {
+                        const float medium_dist = activeVolume->segment_length(shadowRay_hdri, 1e30f);
+                        Tr_hdri = activeVolume->has_density_grid()
+                            ? estimateTransmittance(shadowRay_hdri, medium_dist, activeVolume, activeMedium, rng_state)
+                            : activeMedium.transmittance(medium_dist);
+                    }
+                    if (nee_mode == 0) {
+                        radiance = radiance + throughput * (Le_hdri * f_hdri * (NdotL_hdri / pdf_hdri) * Tr_hdri);
+                    } else {
+                        float pdf_brdf_hdri = BRDFSamplingPdf(hitRecord, Vo, wi_hdri, diffuse_bounce);
+                        float w_hdri = power_heuristic(pdf_hdri, pdf_brdf_hdri);
+                        radiance = radiance + throughput * (Le_hdri * f_hdri * (NdotL_hdri / pdf_hdri) * Tr_hdri * w_hdri);
                     }
                 }
             }

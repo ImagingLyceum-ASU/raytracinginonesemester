@@ -148,7 +148,16 @@ extern std::unordered_map<std::string, std::unique_ptr<Texture>> g_textureCache;
 struct HDRTextureData {
     int          width  = 0;
     int          height = 0;
-    const float* data   = nullptr;   // device pointer after upload
+    const float* data            = nullptr;
+    const float* marginal_cdf    = nullptr;
+    const float* marginal_pdf    = nullptr;
+    const float* conditional_cdf = nullptr;
+    const float* conditional_pdf = nullptr;
+
+    HYBRID_FUNC inline bool hasImportanceSampling() const {
+        return marginal_cdf != nullptr && marginal_pdf != nullptr &&
+               conditional_cdf != nullptr && conditional_pdf != nullptr;
+    }
 
     // Bilinear sample at (u, v) in [0,1]^2, linear-light RGB.
     // u wraps; v is clamped (no wrap at poles).
@@ -192,18 +201,154 @@ struct HDRTextureData {
         Vec3 bottom = c01 * (1.0f - dx) + c11 * dx;
         return top * (1.0f - dy) + bottom * dy;
     }
+
+    HYBRID_FUNC inline Vec3 sampleDirection(float xi1, float xi2, float& out_pdf) const {
+        constexpr float TWO_PI = 6.28318530717958647692f;
+        constexpr float PI     = 3.14159265358979323846f;
+
+        int row = 0;
+        {
+            int lo = 0, hi = height - 1;
+            while (lo < hi) {
+                int mid = (lo + hi) / 2;
+                if (marginal_cdf[mid] < xi1) lo = mid + 1;
+                else hi = mid;
+            }
+            row = lo;
+        }
+
+        int col = 0;
+        {
+            const float* row_cdf = conditional_cdf + row * width;
+            int lo = 0, hi = width - 1;
+            while (lo < hi) {
+                int mid = (lo + hi) / 2;
+                if (row_cdf[mid] < xi2) lo = mid + 1;
+                else hi = mid;
+            }
+            col = lo;
+        }
+
+        float dir_u = (col + 0.5f) / float(width);
+        float dir_v = 1.0f - (row + 0.5f) / float(height);
+
+        float phi      = TWO_PI * (dir_u - 0.5f);
+        float elev     = PI * (dir_v - 0.5f);
+        float z        = sinf(elev);
+        float cos_elev = cosf(elev);
+        Vec3 dir = make_vec3(cos_elev * cosf(phi), cos_elev * sinf(phi), z);
+
+        float p_row     = marginal_pdf[row];
+        float p_col     = conditional_pdf[row * width + col];
+        float pdf_uv    = p_row * p_col * float(width * height);
+        float sin_theta = sinf(PI * dir_v);
+        out_pdf = pdf_uv / (2.0f * PI * PI * fmaxf(sin_theta, 1e-5f));
+
+        return dir;
+    }
+
+    HYBRID_FUNC inline float pdfDirection(const Vec3& dir) const {
+        if (!hasImportanceSampling()) return 0.0f;
+        constexpr float INV_2PI = 0.15915494309f;
+        constexpr float INV_PI  = 0.31830988618f;
+        constexpr float PI      = 3.14159265358979323846f;
+
+        float dz = fminf(fmaxf(dir.z, -1.0f), 1.0f);
+        float u  = 0.5f + atan2f(dir.y, dir.x) * INV_2PI;
+        float v  = 0.5f + asinf(dz) * INV_PI;
+
+        int row = int(fminf(fmaxf((1.0f - v) * float(height), 0.0f), float(height - 1)));
+        int col = int(fminf(fmaxf(u * float(width),  0.0f), float(width  - 1)));
+
+        float p_row     = marginal_pdf[row];
+        float p_col     = conditional_pdf[row * width + col];
+        float pdf_uv    = p_row * p_col * float(width * height);
+        float sin_theta = sinf(PI * v);
+        return pdf_uv / (2.0f * PI * PI * fmaxf(sin_theta, 1e-5f));
+    }
 };
 
 // Host-side HDR texture owner (not uploaded until main.cu does so)
 struct HDRTexture {
     int width = 0, height = 0;
-    std::vector<float> data;   // interleaved RGB floats
-    HDRTextureData sampled;    // lightweight view (host pointer)
+    std::vector<float> data;
+    HDRTextureData sampled;
+
+    std::vector<float> marginal_cdf;
+    std::vector<float> marginal_pdf;
+    std::vector<float> conditional_cdf;
+    std::vector<float> conditional_pdf;
+
+    void buildCDF() {
+        if (width <= 0 || height <= 0 || data.empty()) return;
+
+        constexpr float PI = 3.14159265358979323846f;
+        const float inv_h = 1.0f / float(height);
+
+        marginal_pdf.resize(height);
+        marginal_cdf.resize(height);
+        conditional_pdf.resize(size_t(width) * height);
+        conditional_cdf.resize(size_t(width) * height);
+
+        for (int i = 0; i < height; ++i) {
+            float sin_w = sinf(PI * (i + 0.5f) * inv_h);
+            float row_total = 0.0f;
+            for (int j = 0; j < width; ++j) {
+                int idx = (i * width + j) * 3;
+                float lum = 0.2126f * data[idx] + 0.7152f * data[idx+1] + 0.0722f * data[idx+2];
+                float w = fmaxf(lum * sin_w, 0.0f);
+                conditional_pdf[i * width + j] = w;
+                row_total += w;
+            }
+            marginal_pdf[i] = row_total;
+
+            if (row_total > 0.0f) {
+                const float inv_row = 1.0f / row_total;
+                float cumulative = 0.0f;
+                for (int j = 0; j < width; ++j) {
+                    conditional_pdf[i * width + j] *= inv_row;
+                    cumulative += conditional_pdf[i * width + j];
+                    conditional_cdf[i * width + j] = cumulative;
+                }
+                conditional_cdf[i * width + width - 1] = 1.0f;
+            } else {
+                const float inv_w = 1.0f / float(width);
+                for (int j = 0; j < width; ++j) {
+                    conditional_pdf[i * width + j] = inv_w;
+                    conditional_cdf[i * width + j] = (j + 1) * inv_w;
+                }
+            }
+        }
+
+        float total = 0.0f;
+        for (int i = 0; i < height; ++i) total += marginal_pdf[i];
+
+        if (total > 0.0f) {
+            const float inv_total = 1.0f / total;
+            float cumulative = 0.0f;
+            for (int i = 0; i < height; ++i) {
+                marginal_pdf[i] *= inv_total;
+                cumulative += marginal_pdf[i];
+                marginal_cdf[i] = cumulative;
+            }
+            marginal_cdf[height - 1] = 1.0f;
+        } else {
+            const float inv_h_f = 1.0f / float(height);
+            for (int i = 0; i < height; ++i) {
+                marginal_pdf[i] = inv_h_f;
+                marginal_cdf[i] = (i + 1) * inv_h_f;
+            }
+        }
+    }
 
     void refreshSampledView() {
         sampled.width  = width;
         sampled.height = height;
-        sampled.data   = data.empty() ? nullptr : data.data();
+        sampled.data            = data.empty()            ? nullptr : data.data();
+        sampled.marginal_cdf    = marginal_cdf.empty()    ? nullptr : marginal_cdf.data();
+        sampled.marginal_pdf    = marginal_pdf.empty()    ? nullptr : marginal_pdf.data();
+        sampled.conditional_cdf = conditional_cdf.empty() ? nullptr : conditional_cdf.data();
+        sampled.conditional_pdf = conditional_pdf.empty() ? nullptr : conditional_pdf.data();
     }
 };
 
@@ -234,6 +379,7 @@ inline HDRTexture* LoadHDRTexture(const std::string& path) {
     tex->data.assign(pixels, pixels + (size_t)w * h * 3);
     stbi_image_free(pixels);
     tex->refreshSampledView();
+    tex->buildCDF();
     std::printf("  -> Loaded HDR env map: %s (%dx%d)\n", path.c_str(), w, h);
     return tex;
 }

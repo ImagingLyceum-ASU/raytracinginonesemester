@@ -112,14 +112,16 @@ void AccStruct::BVH::buildBVH(
         mortonCodes64.data().get())), true)
 
     thrust::sort_by_key(
-        mortonCodes64.begin(), 
+        thrust::cuda::par,
+        mortonCodes64.begin(),
         mortonCodes64.end(),
         triangleIndices->begin()
     );
 
     sorted_leaves.resize(numTriangles);
-    
+
     thrust::gather(
+        thrust::cuda::par,
         triangleIndices->begin(),
         triangleIndices->end(),
         thrust::device_pointer_cast(aabbs) + numTriangles - 1,
@@ -127,26 +129,27 @@ void AccStruct::BVH::buildBVH(
     );
 
     thrust::copy(
+        thrust::cuda::par,
         sorted_leaves.begin(),
         sorted_leaves.end(),
         thrust::device_pointer_cast(aabbs) + numTriangles - 1
     );
-    
+
     BVHNode default_node;
     default_node.object_idx = 0xFFFFFFFF;
     default_node.left_idx = 0xFFFFFFFF;
     default_node.right_idx = 0xFFFFFFFF;
     default_node.parent_idx = 0xFFFFFFFF;
 
-    thrust::fill(thrust::device, BVHNodes, BVHNodes + (2 * numTriangles - 1), default_node);
+    thrust::fill(thrust::cuda::par, BVHNodes, BVHNodes + (2 * numTriangles - 1), default_node);
 
     thrust::transform(
+        thrust::cuda::par,
         triangleIndices->begin(),
         triangleIndices->end(),
         thrust::device_pointer_cast(BVHNodes) + numTriangles - 1,
         [] __device__ (const std::uint32_t idx) {
             BVHNode node;
-            // node.object_idx = (*triangleIndices)[idx];
             node.object_idx = idx;
             node.left_idx = 0xFFFFFFFF;
             node.right_idx = 0xFFFFFFFF;
@@ -157,19 +160,18 @@ void AccStruct::BVH::buildBVH(
 
     // Initialize internal node AABBs to "invalid" state
     AABB invalid_aabb;
-    thrust::fill(thrust::device, 
-        thrust::device_pointer_cast(aabbs), 
-        thrust::device_pointer_cast(aabbs) + numTriangles - 1, 
+    thrust::fill(thrust::cuda::par,
+        thrust::device_pointer_cast(aabbs),
+        thrust::device_pointer_cast(aabbs) + numTriangles - 1,
         invalid_aabb);
 
     const unsigned long long int* node_code = mortonCodes64.data().get();
     construct_internal_nodes(BVHNodes, node_code, numTriangles);
 
-    // thrust::device_vector<int> flag_container(numTriangles, 0);
     flag_container.assign(numTriangles, 0);
     const auto flags = flag_container.data().get();
 
-    thrust::for_each(thrust::device,
+    thrust::for_each(thrust::cuda::par,
         thrust::make_counting_iterator<std::uint32_t>(numTriangles-1),
         thrust::make_counting_iterator<std::uint32_t>(2*numTriangles-1),
         [BVHNodes, aabbs, flags] __device__ (const std::uint32_t idx) {

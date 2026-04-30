@@ -211,6 +211,7 @@ int main(int argc, char** argv)
     // Parse optional flags
     bool use_denoiser = false;
     std::string output_filename = "render.png";
+    std::string scene_file_path;
     int nee_mode = 2;
     bool use_bdpt = false;     // BDPT integrator opt-in: --integrator bdpt
     std::vector<char*> positional_args;
@@ -274,6 +275,7 @@ int main(int argc, char** argv)
                 return 1;
             }
             has_scene = true;
+            scene_file_path = first;
             scene_base_dir = SceneIO::dirname(first);
             scene_project_dir = SceneIO::dirname(SceneIO::dirname(scene_base_dir));
             for (const auto& obj : scene.objects) {
@@ -719,24 +721,52 @@ int main(int argc, char** argv)
     }
 
     // ---- Load & upload HDR sky environment map ----
-    HDRTextureData  h_hdri{};          // host-side view (data = host ptr)
-    HDRTextureData* d_hdri = nullptr;  // device pointer to HDRTextureData struct
-    float*          d_hdri_pixels = nullptr;
+    HDRTextureData* d_hdri = nullptr;
+    float*          d_hdri_pixels        = nullptr;
+    float*          d_hdri_marginal_cdf  = nullptr;
+    float*          d_hdri_marginal_pdf  = nullptr;
+    float*          d_hdri_conditional_cdf = nullptr;
+    float*          d_hdri_conditional_pdf = nullptr;
     HDRTexture*     hdri_owner = nullptr;
 
     if (!scene.sky_hdri_path.empty()) {
         hdri_owner = LoadHDRTexture(scene.sky_hdri_path);
         if (hdri_owner) {
-            size_t floatBytes = (size_t)hdri_owner->width * hdri_owner->height * 3 * sizeof(float);
-            CHECK_CUDA((cudaMalloc(&d_hdri_pixels, floatBytes)), true);
-            CHECK_CUDA((cudaMemcpy(d_hdri_pixels, hdri_owner->data.data(),
-                                   floatBytes, cudaMemcpyHostToDevice)), true);
+            const int hdri_w = hdri_owner->width;
+            const int hdri_h = hdri_owner->height;
 
-            // Build a device-side HDRTextureData struct pointing to device pixels
+            size_t pixelBytes = (size_t)hdri_w * hdri_h * 3 * sizeof(float);
+            CHECK_CUDA((cudaMalloc(&d_hdri_pixels, pixelBytes)), true);
+            CHECK_CUDA((cudaMemcpy(d_hdri_pixels, hdri_owner->data.data(),
+                                   pixelBytes, cudaMemcpyHostToDevice)), true);
+
+            size_t margBytes = (size_t)hdri_h * sizeof(float);
+            size_t condBytes = (size_t)hdri_w * hdri_h * sizeof(float);
+
+            CHECK_CUDA((cudaMalloc(&d_hdri_marginal_cdf, margBytes)), true);
+            CHECK_CUDA((cudaMemcpy(d_hdri_marginal_cdf, hdri_owner->marginal_cdf.data(),
+                                   margBytes, cudaMemcpyHostToDevice)), true);
+
+            CHECK_CUDA((cudaMalloc(&d_hdri_marginal_pdf, margBytes)), true);
+            CHECK_CUDA((cudaMemcpy(d_hdri_marginal_pdf, hdri_owner->marginal_pdf.data(),
+                                   margBytes, cudaMemcpyHostToDevice)), true);
+
+            CHECK_CUDA((cudaMalloc(&d_hdri_conditional_cdf, condBytes)), true);
+            CHECK_CUDA((cudaMemcpy(d_hdri_conditional_cdf, hdri_owner->conditional_cdf.data(),
+                                   condBytes, cudaMemcpyHostToDevice)), true);
+
+            CHECK_CUDA((cudaMalloc(&d_hdri_conditional_pdf, condBytes)), true);
+            CHECK_CUDA((cudaMemcpy(d_hdri_conditional_pdf, hdri_owner->conditional_pdf.data(),
+                                   condBytes, cudaMemcpyHostToDevice)), true);
+
             HDRTextureData dev_hdri;
-            dev_hdri.width  = hdri_owner->width;
-            dev_hdri.height = hdri_owner->height;
-            dev_hdri.data   = d_hdri_pixels;
+            dev_hdri.width           = hdri_w;
+            dev_hdri.height          = hdri_h;
+            dev_hdri.data            = d_hdri_pixels;
+            dev_hdri.marginal_cdf    = d_hdri_marginal_cdf;
+            dev_hdri.marginal_pdf    = d_hdri_marginal_pdf;
+            dev_hdri.conditional_cdf = d_hdri_conditional_cdf;
+            dev_hdri.conditional_pdf = d_hdri_conditional_pdf;
 
             CHECK_CUDA((cudaMalloc(&d_hdri, sizeof(HDRTextureData))), true);
             CHECK_CUDA((cudaMemcpy(d_hdri, &dev_hdri,
@@ -983,6 +1013,7 @@ int main(int argc, char** argv)
            d_hdri);
 
     auto rebuildGPUGeometry = [&]() {
+        cudaSetDevice(0);
         cudaFree(d_positions);
         if (d_normals) cudaFree(d_normals);
         if (d_uvs) cudaFree(d_uvs);
@@ -1034,15 +1065,18 @@ int main(int argc, char** argv)
 
         CHECK_CUDA(bvh.calculateAABBs(d_mesh, bvhState.AABBs), true);
 
+        cudaGetLastError(); // clear any sticky error before Thrust
         AABB newSceneBB;
         newSceneBB = thrust::reduce(
+            thrust::cuda::par,
             thrust::device_pointer_cast(bvhState.AABBs + (P - 1)),
             thrust::device_pointer_cast(bvhState.AABBs + (2*P - 1)),
             AABB(),
             [] __device__ __host__ (const AABB& a, const AABB& b) { return AABB::merge(a, b); });
 
         thrust::device_vector<unsigned int> newTriIdx(P);
-        thrust::copy(thrust::make_counting_iterator<std::uint32_t>(0),
+        thrust::copy(thrust::cuda::par,
+            thrust::make_counting_iterator<std::uint32_t>(0),
             thrust::make_counting_iterator<std::uint32_t>(P), newTriIdx.begin());
         bvh.buildBVH(bvhState.Nodes, bvhState.AABBs, newSceneBB, &newTriIdx, static_cast<int>(P));
         cudaDeviceSynchronize();
@@ -1072,6 +1106,8 @@ int main(int argc, char** argv)
         mapped = powf(fmaxf(mapped, 0.0f), 1.0f / 2.2f);
         return static_cast<unsigned char>(255.0f * fminf(mapped, 1.0f));
     };
+
+    auto total_start = std::chrono::high_resolution_clock::now();
 
     for (int frame = 0; frame < keyframes; ++frame) {
         if (keyframes > 1)
@@ -1283,6 +1319,36 @@ int main(int argc, char** argv)
         printf("Image saved to %s\n", fname.c_str());
     }
 
+    {
+        auto total_end = std::chrono::high_resolution_clock::now();
+        double total_s = std::chrono::duration<double>(total_end - total_start).count();
+
+        // Derive stats filename from output: strip extension, append _stats.json
+        std::string stats_path = output_filename;
+        auto dot = stats_path.rfind('.');
+        if (dot != std::string::npos) stats_path.erase(dot);
+        stats_path += "_stats.json";
+
+        const char* nee_labels[] = {"area", "brdf", "mis"};
+        std::ofstream js(stats_path);
+        js << "{\n";
+        js << "  \"scene\": \"" << scene_file_path << "\",\n";
+        js << "  \"output\": \"" << output_filename << "\",\n";
+        js << "  \"width\": " << img_w << ",\n";
+        js << "  \"height\": " << img_h << ",\n";
+        js << "  \"spp\": " << spp << ",\n";
+        js << "  \"max_depth\": " << max_depth << ",\n";
+        js << "  \"integrator\": \"" << (use_bdpt ? "bdpt" : "pt") << "\",\n";
+        js << "  \"nee\": \"" << nee_labels[nee_mode] << "\",\n";
+        js << "  \"diffuse_bounce\": " << (diffuse_bounce ? "true" : "false") << ",\n";
+        js << "  \"denoiser\": " << (use_denoiser ? "true" : "false") << ",\n";
+        js << "  \"keyframes\": " << keyframes << ",\n";
+        js << "  \"triangles\": " << P << ",\n";
+        js << "  \"total_render_time_s\": " << total_s << "\n";
+        js << "}\n";
+        printf("Render stats saved to %s\n", stats_path.c_str());
+    }
+
 #ifdef __CUDACC__
     cudaFree(d_tris);
     cudaFree(d_image);
@@ -1304,6 +1370,13 @@ int main(int argc, char** argv)
     for (auto* p : d_volumeFlamePtrs) { if (p) cudaFree(p); }
     if (d_textures) cudaFree(d_textures);
     for (auto* p : d_texPixelPtrs) { if (p) cudaFree(p); }
+    if (d_hdri)                cudaFree(d_hdri);
+    if (d_hdri_pixels)         cudaFree(d_hdri_pixels);
+    if (d_hdri_marginal_cdf)   cudaFree(d_hdri_marginal_cdf);
+    if (d_hdri_marginal_pdf)   cudaFree(d_hdri_marginal_pdf);
+    if (d_hdri_conditional_cdf) cudaFree(d_hdri_conditional_cdf);
+    if (d_hdri_conditional_pdf) cudaFree(d_hdri_conditional_pdf);
+    delete hdri_owner;
 #endif
 
     return 0;
